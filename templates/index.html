@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KI-Atteste</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v={{ range(1,10000)|random }}">
+  <!-- marked.js für Markdown-Rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+  <!-- HEADER -->
+  <div class="page-header">
+    <div class="header-container">
+      <div class="header-left">
+        <svg class="logo-svg" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
+          <rect width="60" height="60" rx="10" fill="#10b981"/>
+          <path d="M30 12 L30 48 M18 30 L42 30" stroke="white" stroke-width="6" stroke-linecap="round"/>
+          <path d="M20 18 Q30 10 40 18" stroke="white" stroke-width="3" fill="none" stroke-linecap="round"/>
+        </svg>
+        <div>
+          <h1>KI-Atteste</h1>
+          <p class="page-subtitle">Medizinische Atteste & Zeugnisse mit lokaler KI</p>
+        </div>
+      </div>
+      <div class="header-right">
+        <span class="version-badge">v{{ version }}</span>
+        <div class="model-control">
+          <label for="modelSelect">Modell:</label>
+          <select id="modelSelect" class="model-select-dropdown"></select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN LAYOUT -->
+  <div class="main-layout">
+
+    <!-- CHAT AREA -->
+    <div class="chat-area" id="chatArea">
+      <div class="chat-welcome" id="chatWelcome">
+        <div class="welcome-icon">🏥</div>
+        <h2>Medizinische Atteste erstellen</h2>
+        <p>Stellen Sie Ihre Anfrage oder laden Sie Dokumente hoch, um ein Attest zu erstellen.</p>
+        <div class="welcome-examples">
+          <button class="example-btn" onclick="setExample(this)">Arbeitsunfähigkeitsbescheinigung erstellen</button>
+          <button class="example-btn" onclick="setExample(this)">Ärztliches Attest für Behörde</button>
+          <button class="example-btn" onclick="setExample(this)">Kurze Zusammenfassung der hochgeladenen Befunde</button>
+          <button class="example-btn" onclick="setExample(this)">Entlassungsbrief formulieren</button>
+        </div>
+      </div>
+      <div class="chat-messages" id="chatMessages"></div>
+    </div>
+
+    <!-- INPUT AREA -->
+    <div class="input-area">
+      <!-- Attached files display -->
+      <div class="attached-files" id="attachedFiles" style="display:none;"></div>
+
+      <div class="input-row">
+        <div class="input-wrapper">
+          <textarea
+            id="userInput"
+            placeholder="Anfrage eingeben... (Enter zum Senden, Shift+Enter für neue Zeile)"
+            rows="1"
+            maxlength="10000"
+          ></textarea>
+        </div>
+        <div class="input-buttons">
+          <label class="attach-btn" for="fileInput" title="Dateien anhängen (PDF, DOCX, TXT)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/>
+            </svg>
+          </label>
+          <input type="file" id="fileInput" multiple accept=".pdf,.docx,.txt" style="display:none;">
+          <button class="send-btn" id="sendBtn" title="Senden (Enter)">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="input-hint">
+        PDF, DOCX und TXT werden unterstützt &nbsp;·&nbsp; Alle Daten bleiben lokal
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Spinner Overlay -->
+  <div id="spinnerOverlay" style="display:none;">
+    <div class="spinner"></div>
+  </div>
+
+  <script src="{{ url_for('static', filename='app.js') }}?v={{ range(1,10000)|random }}"></script>
+</body>
+</html>

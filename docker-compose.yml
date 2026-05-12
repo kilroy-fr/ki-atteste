@@ -1,0 +1,32 @@
+services:
+  ki-atteste-web:
+    container_name: ki-atteste-web
+    build: .
+    restart: unless-stopped
+    expose:
+      - "5000"
+    ports:
+      - "127.0.0.1:5010:5000"
+    volumes:
+      - ./uploads:/app/uploads
+      # Development: Hot-Reload durch Einbinden der Quelldateien
+      - ./app.py:/app/app.py
+      - ./templates:/app/templates
+      - ./static:/app/static
+    environment:
+      - TZ=${TZ:-Europe/Berlin}
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+    stdin_open: true
+    tty: true
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - app-network
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+networks:
+  app-network:
+    external: true
+    name: ${DOCKER_NETWORK:-caddy-proxy-network}
