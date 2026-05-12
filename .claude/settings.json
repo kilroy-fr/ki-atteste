@@ -5,6 +5,9 @@
       "Read(//c/Users/**)",
       "PowerShell(curl http://localhost:11434/api/tags 2>$null)",
       "PowerShell(python -m json.tool 2>$null)"
+    ],
+    "additionalDirectories": [
+      "C:\\Users\\Jan.DOMAIN\\caddy-proxy"
     ]
   }
 }
