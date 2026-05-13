@@ -15,6 +15,7 @@ let conversationHistory = [];
 // Datei-Einträge: [{file: File, ocrJobId: string|null, ocrStatus: 'none'|'pending'|'done'|'error', ocrText: string|null, pollInterval: number|null}]
 let attachedFiles = [];
 let isStreaming = false;
+let currentAbortController = null;
 
 // ============================================================
 // CHAT PERSISTENZ (localStorage)
@@ -269,7 +270,11 @@ userInput.addEventListener('keydown', e => {
 });
 
 sendBtn.addEventListener('click', () => {
-  if (!isStreaming) sendMessage();
+  if (isStreaming) {
+    if (currentAbortController) currentAbortController.abort();
+  } else {
+    sendMessage();
+  }
 });
 
 // ---- Beispiel-Buttons ----
@@ -325,7 +330,8 @@ async function sendMessage() {
   let fullResponse = '';
 
   try {
-    const response = await fetch('/chat', {method: 'POST', body: formData});
+    currentAbortController = new AbortController();
+    const response = await fetch('/chat', {method: 'POST', body: formData, signal: currentAbortController.signal});
 
     if (!response.ok) {
       throw new Error(`Server-Fehler: ${response.status}`);
@@ -375,10 +381,17 @@ async function sendMessage() {
     saveCurrentChat(newTitle);
 
   } catch (err) {
-    updateAssistantMessage(assistantBubble, `⚠️ Verbindungsfehler: ${err.message}`, false);
-    conversationHistory.push({role: 'assistant', content: `Fehler: ${err.message}`});
+    if (err.name === 'AbortError') {
+      const partial = fullResponse || '*(Abgebrochen)*';
+      updateAssistantMessage(assistantBubble, partial, false);
+      conversationHistory.push({role: 'assistant', content: partial});
+    } else {
+      updateAssistantMessage(assistantBubble, `⚠️ Verbindungsfehler: ${err.message}`, false);
+      conversationHistory.push({role: 'assistant', content: `Fehler: ${err.message}`});
+    }
     saveCurrentChat(newTitle);
   } finally {
+    currentAbortController = null;
     setSending(false);
     scrollToBottom();
   }
@@ -447,12 +460,17 @@ function appendAssistantMessage(text, isLoading) {
 
   const copyBtn = document.createElement('button');
   copyBtn.className = 'copy-msg-btn';
-  copyBtn.textContent = 'Kopieren';
+  copyBtn.title = 'Kopieren';
+  copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
   copyBtn.onclick = () => {
     const rawText = bubble.dataset.rawText || text;
     navigator.clipboard.writeText(rawText).then(() => {
-      copyBtn.textContent = 'Kopiert!';
-      setTimeout(() => copyBtn.textContent = 'Kopieren', 2000);
+      copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="15" height="15"><polyline points="20 6 9 17 4 12"/></svg>';
+      copyBtn.classList.add('copied');
+      setTimeout(() => {
+        copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
+        copyBtn.classList.remove('copied');
+      }, 2000);
     });
   };
   bubble.appendChild(copyBtn);
@@ -484,10 +502,14 @@ function scrollToBottom() {
 
 function setSending(on) {
   isStreaming = on;
-  sendBtn.disabled = on;
+  sendBtn.disabled = false;
   if (on) {
-    sendBtn.innerHTML = '<div class="spinner" style="width:16px;height:16px;border-width:3px;"></div>';
+    sendBtn.classList.add('cancel-mode');
+    sendBtn.title = 'Abbrechen';
+    sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>';
   } else {
+    sendBtn.classList.remove('cancel-mode');
+    sendBtn.title = 'Senden (Enter)';
     sendBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>';
   }
 }

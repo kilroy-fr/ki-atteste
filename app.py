@@ -244,9 +244,10 @@ def chat():
             text = extract_text_from_file(f)
             file_texts.append(f"--- Datei: {f.filename} ---\n{text}")
 
-    full_content = user_message
     if file_texts:
-        full_content += "\n\n" + "\n\n".join(file_texts)
+        full_content = "\n\n".join(file_texts) + "\n\n---\nAufgabe: " + user_message
+    else:
+        full_content = user_message
 
     if not full_content:
         return jsonify({"error": "Keine Nachricht eingegeben"}), 400

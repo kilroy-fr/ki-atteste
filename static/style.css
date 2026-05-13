@@ -439,21 +439,26 @@ body {
 /* Copy button */
 .copy-msg-btn {
   position: absolute;
-  top: 8px;
+  bottom: 8px;
   right: 8px;
   background: var(--card-bg);
   border: 1px solid var(--border);
   color: var(--text-muted);
   border-radius: 6px;
-  padding: 4px 8px;
-  font-size: 0.75rem;
+  padding: 5px;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 0.2s;
+  transition: opacity 0.2s, color 0.2s, border-color 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
 }
 
 .message-assistant:hover .copy-msg-btn { opacity: 1; }
 .copy-msg-btn:hover { color: var(--text); border-color: var(--secondary); }
+.copy-msg-btn.copied { color: var(--primary); border-color: var(--primary); }
 
 /* Files in user message */
 .message-files {
@@ -638,6 +643,8 @@ body {
 .send-btn:hover { background: var(--primary-hover); transform: scale(1.05); }
 .send-btn:active { transform: scale(0.95); }
 .send-btn:disabled { background: var(--card-bg); color: var(--text-muted); cursor: not-allowed; transform: none; }
+.send-btn.cancel-mode { background: #c53030; }
+.send-btn.cancel-mode:hover { background: #9b2c2c; transform: scale(1.05); }
 
 .send-btn svg { width: 16px; height: 16px; }
 
