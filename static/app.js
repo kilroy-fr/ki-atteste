@@ -12,6 +12,7 @@ const modelSelect  = document.getElementById('modelSelect');
 
 // Conversation history: [{role: 'user'|'assistant', content: '...'}]
 let conversationHistory = [];
+// Datei-Einträge: [{file: File, ocrJobId: string|null, ocrStatus: 'none'|'pending'|'done'|'error', ocrText: string|null, pollInterval: number|null}]
 let attachedFiles = [];
 let isStreaming = false;
 
@@ -56,13 +57,62 @@ modelSelect.addEventListener('change', async () => {
 // ---- Datei-Anhänge ----
 fileInput.addEventListener('change', () => {
   Array.from(fileInput.files).forEach(f => {
-    if (!attachedFiles.find(x => x.name === f.name)) {
-      attachedFiles.push(f);
-    }
+    if (attachedFiles.find(x => x.file.name === f.name)) return;
+    const needsOcr = /\.(jpg|jpeg|pdf)$/i.test(f.name);
+    const entry = {
+      file: f,
+      ocrJobId: null,
+      ocrStatus: needsOcr ? 'pending' : 'none',
+      ocrText: null,
+      pollInterval: null,
+    };
+    attachedFiles.push(entry);
+    if (needsOcr) startOcr(entry);
   });
   fileInput.value = '';
   renderAttachedFiles();
 });
+
+async function startOcr(entry) {
+  try {
+    const fd = new FormData();
+    fd.append('file', entry.file);
+    const res = await fetch('/api/ocr', {method: 'POST', body: fd});
+    const data = await res.json();
+    if (data.job_id) {
+      entry.ocrJobId = data.job_id;
+      entry.pollInterval = setInterval(() => pollOcr(entry), 1500);
+    } else {
+      entry.ocrStatus = 'error';
+      entry.ocrText = '[OCR-Fehler]';
+      renderAttachedFiles();
+    }
+  } catch (e) {
+    entry.ocrStatus = 'error';
+    entry.ocrText = '[OCR-Fehler]';
+    renderAttachedFiles();
+  }
+}
+
+async function pollOcr(entry) {
+  try {
+    const res = await fetch(`/api/ocr/${entry.ocrJobId}`);
+    const data = await res.json();
+    if (data.status === 'done') {
+      clearInterval(entry.pollInterval);
+      entry.pollInterval = null;
+      entry.ocrStatus = 'done';
+      entry.ocrText = data.text;
+      renderAttachedFiles();
+    } else if (data.status === 'error') {
+      clearInterval(entry.pollInterval);
+      entry.pollInterval = null;
+      entry.ocrStatus = 'error';
+      entry.ocrText = data.text || '[OCR-Fehler]';
+      renderAttachedFiles();
+    }
+  } catch (_) {}
+}
 
 function renderAttachedFiles() {
   if (attachedFiles.length === 0) {
@@ -71,15 +121,19 @@ function renderAttachedFiles() {
     return;
   }
   attachedFilesEl.style.display = 'flex';
-  attachedFilesEl.innerHTML = attachedFiles.map((f, i) =>
-    `<div class="file-chip">
-      📎 ${escapeHtml(f.name)}
+  attachedFilesEl.innerHTML = attachedFiles.map((entry, i) => {
+    const pending = entry.ocrStatus === 'pending';
+    const icon = pending ? '<span class="chip-spinner"></span>' : '📎';
+    return `<div class="file-chip${pending ? ' ocr-pending' : ''}">
+      ${icon} ${escapeHtml(entry.file.name)}
       <button class="remove-file" onclick="removeFile(${i})" title="Entfernen">✕</button>
-    </div>`
-  ).join('');
+    </div>`;
+  }).join('');
 }
 
 function removeFile(idx) {
+  const entry = attachedFiles[idx];
+  if (entry.pollInterval) clearInterval(entry.pollInterval);
   attachedFiles.splice(idx, 1);
   renderAttachedFiles();
 }
@@ -113,31 +167,40 @@ async function sendMessage() {
   const text = userInput.value.trim();
   if (!text && attachedFiles.length === 0) return;
 
-  // Welcome ausblenden
   if (chatWelcome) chatWelcome.style.display = 'none';
 
-  // User-Nachricht anzeigen
   const files = [...attachedFiles];
-  appendUserMessage(text, files);
 
-  // Eingabe leeren
+  // Polling stoppen (Jobs laufen server-seitig weiter, aber wir brauchen sie nicht mehr)
+  files.forEach(entry => {
+    if (entry.pollInterval) clearInterval(entry.pollInterval);
+  });
+
   userInput.value = '';
   userInput.style.height = 'auto';
   attachedFiles = [];
   renderAttachedFiles();
 
-  // History speichern
+  appendUserMessage(text, files);
   conversationHistory.push({role: 'user', content: text || '[Dateien hochgeladen]'});
 
-  // Assistent-Bubble mit Typing-Indikator
   const assistantBubble = appendAssistantMessage('', true);
   setSending(true);
 
-  // Form-Daten aufbauen
   const formData = new FormData();
   formData.append('message', text);
   formData.append('history', JSON.stringify(conversationHistory.slice(0, -1)));
-  files.forEach(f => formData.append('files', f));
+
+  // Vorextrahierte OCR-Texte separat schicken; Dateien ohne OCR direkt anhängen
+  const preExtracted = {};
+  files.forEach(entry => {
+    if (entry.ocrText !== null) {
+      preExtracted[entry.file.name] = entry.ocrText;
+    } else {
+      formData.append('files', entry.file);
+    }
+  });
+  formData.append('pre_extracted_texts', JSON.stringify(preExtracted));
 
   let fullResponse = '';
 
@@ -174,7 +237,6 @@ async function sendMessage() {
           if (chunk.token) {
             if (!started) {
               started = true;
-              // Typing-Indikator entfernen
               const content = assistantBubble.querySelector('.message-content');
               if (content) content.innerHTML = '';
             }
@@ -188,7 +250,6 @@ async function sendMessage() {
       }
     }
 
-    // Finale Darstellung
     updateAssistantMessage(assistantBubble, fullResponse, false);
     conversationHistory.push({role: 'assistant', content: fullResponse});
 
@@ -223,10 +284,10 @@ function appendUserMessage(text, files) {
   if (files.length > 0) {
     const filesDiv = document.createElement('div');
     filesDiv.className = 'message-files';
-    files.forEach(f => {
+    files.forEach(entry => {
       const chip = document.createElement('span');
       chip.className = 'message-file-chip';
-      chip.textContent = '📎 ' + f.name;
+      chip.textContent = '📎 ' + entry.file.name;
       filesDiv.appendChild(chip);
     });
     bubble.appendChild(filesDiv);
@@ -262,7 +323,6 @@ function appendAssistantMessage(text, isLoading) {
   }
   bubble.appendChild(content);
 
-  // Copy-Button
   const copyBtn = document.createElement('button');
   copyBtn.className = 'copy-msg-btn';
   copyBtn.textContent = 'Kopieren';

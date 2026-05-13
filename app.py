@@ -1,11 +1,15 @@
+import io
 import os
 import json
 import time
+import uuid
 import threading
 import requests
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response, session
 import fitz  # PyMuPDF
+import pytesseract
+from PIL import Image
 from docx import Document
 
 app = Flask(__name__)
@@ -16,7 +20,6 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:1143
 UPLOAD_FOLDER = "/app/uploads"
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
-# Models excluded from the medical attestation tool
 EXCLUDED_MODELS = {
     "nomic-embed-text:latest",
     "nomic-embed-text",
@@ -29,13 +32,75 @@ EXCLUDED_MODELS = {
 
 DEFAULT_MODEL = "qwen2.5:14b"
 
-SYSTEM_PROMPT = """Du bist ein KI-Assistent für medizinische Fachkräfte. Du hilfst beim Erstellen von medizinischen Attesten, Zeugnissen, Gutachten und Berichten.
+_PROMPT_FILE = Path(__file__).parent / "prompts" / "system_prompt.md"
+SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").strip()
 
-Antworte auf Deutsch, professionell und medizinisch korrekt.
-Formatiere Atteste strukturiert mit den notwendigen Standardangaben (Patient, Datum, Diagnose, Befund, Empfehlung).
-Beachte die deutschen medizinischen Konventionen und verwende korrekte Fachsprache.
-Wenn Dokumente hochgeladen wurden, analysiere deren Inhalt und beziehe ihn in deine Antwort ein.
-Weise darauf hin, wenn du dir bei medizinischen Sachverhalten unsicher bist."""
+# ---- Deckblatt-Erkennung (wie im ocr-service) ----
+_COVER_KEYWORDS = [
+    "fax", "deckblatt", "faxnummer", "telefax", "fax-deckblatt", "faxseiten", "faxgerät",
+    "scandatei", "iq4docs", "notificationservice", "followme.print",
+    "automatisch generiert", "automatisch von", "scandatei von",
+]
+_EMAIL_HEADERS = ["von:", "an:", "betreff:", "gesendet:"]
+
+def _is_cover_page(text: str) -> bool:
+    lower = text.lower()
+    if any(kw in lower for kw in _COVER_KEYWORDS):
+        return True
+    return sum(1 for h in _EMAIL_HEADERS if h in lower) >= 3
+
+# ---- OCR-Jobs (In-Memory) ----
+# {job_id: {"status": "pending"|"done"|"error", "text": str}}
+_ocr_jobs: dict = {}
+_ocr_lock = threading.Lock()
+
+
+def _ocr_run(job_id: str, data: bytes, filename: str) -> None:
+    fn = filename.lower()
+    try:
+        if fn.endswith((".jpg", ".jpeg")):
+            img = Image.open(io.BytesIO(data))
+            text = pytesseract.image_to_string(img, lang="deu").strip()
+
+        elif fn.endswith(".pdf"):
+            doc = fitz.open(stream=data, filetype="pdf")
+            num_pages = len(doc)
+            if num_pages == 0:
+                doc.close()
+                with _ocr_lock:
+                    _ocr_jobs[job_id] = {"status": "done", "text": ""}
+                return
+
+            # Entscheide: Textbasiert oder bildbasiert?
+            total_chars = sum(len((p.get_text() or "").strip()) for p in doc)
+            if total_chars >= 100:
+                page_texts = [(p.get_text() or "").strip() for p in doc]
+            else:
+                # Bildbasiertes PDF: Seiten rendern und OCR
+                page_texts = []
+                for p in doc:
+                    mat = fitz.Matrix(2, 2)
+                    pix = p.get_pixmap(matrix=mat)
+                    img = Image.open(io.BytesIO(pix.tobytes("png")))
+                    page_texts.append(pytesseract.image_to_string(img, lang="deu"))
+
+            doc.close()
+
+            # Deckblatt überspringen
+            start = 0
+            if num_pages > 1 and _is_cover_page(page_texts[0]):
+                start = 1
+            text = "\n\n".join(page_texts[start:]).strip()
+
+        else:
+            text = ""
+
+        with _ocr_lock:
+            _ocr_jobs[job_id] = {"status": "done", "text": text}
+
+    except Exception as e:
+        with _ocr_lock:
+            _ocr_jobs[job_id] = {"status": "error", "text": f"[OCR-Fehler: {e}]"}
 
 
 def _get_version():
@@ -92,18 +157,53 @@ def set_model():
     return resp
 
 
+# ---- OCR-Endpoint: Datei hochladen, Job starten ----
+@app.route("/api/ocr", methods=["POST"])
+def api_ocr_start():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "Keine Datei"}), 400
+
+    data = f.read()
+    job_id = str(uuid.uuid4())
+
+    with _ocr_lock:
+        _ocr_jobs[job_id] = {"status": "pending", "text": ""}
+
+    t = threading.Thread(target=_ocr_run, args=(job_id, data, f.filename), daemon=True)
+    t.start()
+
+    return jsonify({"job_id": job_id})
+
+
+# ---- OCR-Status pollen ----
+@app.route("/api/ocr/<job_id>")
+def api_ocr_status(job_id):
+    with _ocr_lock:
+        job = _ocr_jobs.get(job_id)
+    if not job:
+        return jsonify({"status": "not_found"}), 404
+    return jsonify(job)
+
+
 def extract_text_from_file(file_storage):
     filename = file_storage.filename.lower()
     try:
         if filename.endswith(".pdf"):
             data = file_storage.read()
             doc = fitz.open(stream=data, filetype="pdf")
-            text = "\n\n".join(page.get_text() for page in doc)
+            num_pages = len(doc)
+            if num_pages == 0:
+                doc.close()
+                return ""
+            page_texts = [(p.get_text() or "").strip() for p in doc]
             doc.close()
-            return text.strip()
+            start = 0
+            if num_pages > 1 and _is_cover_page(page_texts[0]):
+                start = 1
+            return "\n\n".join(page_texts[start:]).strip()
         elif filename.endswith(".docx"):
             data = file_storage.read()
-            import io
             doc = Document(io.BytesIO(data))
             return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
         elif filename.endswith(".txt"):
@@ -119,21 +219,31 @@ def extract_text_from_file(file_storage):
 def chat():
     model = session.get("selected_model", DEFAULT_MODEL)
 
-    # Parse incoming data from multipart form
     try:
         history = json.loads(request.form.get("history", "[]"))
     except (ValueError, TypeError):
         history = []
     user_message = request.form.get("message", "").strip()
 
-    # Extract text from uploaded files
+    # Vom Frontend vorextrahierte OCR-Texte (Dateiname → Text)
+    try:
+        pre_extracted = json.loads(request.form.get("pre_extracted_texts", "{}"))
+    except (ValueError, TypeError):
+        pre_extracted = {}
+
     file_texts = []
+
+    # Vorextrahierte Texte zuerst einbauen
+    for fname, text in pre_extracted.items():
+        if text:
+            file_texts.append(f"--- Datei: {fname} ---\n{text}")
+
+    # Direkt übermittelte Dateien (DOCX, TXT, Fallback)
     for f in request.files.getlist("files"):
         if f and f.filename:
             text = extract_text_from_file(f)
             file_texts.append(f"--- Datei: {f.filename} ---\n{text}")
 
-    # Build the user content: message + file contents
     full_content = user_message
     if file_texts:
         full_content += "\n\n" + "\n\n".join(file_texts)
@@ -141,7 +251,6 @@ def chat():
     if not full_content:
         return jsonify({"error": "Keine Nachricht eingegeben"}), 400
 
-    # Build messages list for Ollama
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
     for turn in history:
         role = turn.get("role", "user")
