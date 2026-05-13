@@ -16,6 +16,123 @@ let conversationHistory = [];
 let attachedFiles = [];
 let isStreaming = false;
 
+// ============================================================
+// CHAT PERSISTENZ (localStorage)
+// ============================================================
+const CHATS_KEY = 'ki_atteste_chats';
+let currentChatId = null;
+
+function newUUID() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID();
+  return Date.now().toString(36) + Math.random().toString(36).slice(2);
+}
+
+function getChats() {
+  try { return JSON.parse(localStorage.getItem(CHATS_KEY) || '[]'); }
+  catch (_) { return []; }
+}
+
+function saveChats(chats) {
+  try { localStorage.setItem(CHATS_KEY, JSON.stringify(chats)); }
+  catch (_) {}
+}
+
+function saveCurrentChat(title) {
+  if (!currentChatId || conversationHistory.length === 0) return;
+  const chats = getChats();
+  const idx = chats.findIndex(c => c.id === currentChatId);
+  const now = Date.now();
+  if (idx >= 0) {
+    chats[idx].history = [...conversationHistory];
+    chats[idx].updated = now;
+    if (title) chats[idx].title = title;
+  } else {
+    chats.unshift({ id: currentChatId, title: title || 'Chat', created: now, updated: now, history: [...conversationHistory] });
+    if (chats.length > 50) chats.length = 50;
+  }
+  chats.sort((a, b) => b.updated - a.updated);
+  saveChats(chats);
+  renderSidebar();
+}
+
+function deleteChat(id) {
+  saveChats(getChats().filter(c => c.id !== id));
+  if (currentChatId === id) startNewChat();
+  else renderSidebar();
+}
+
+function startNewChat() {
+  currentChatId = null;
+  conversationHistory = [];
+  attachedFiles.forEach(e => { if (e.pollInterval) clearInterval(e.pollInterval); });
+  attachedFiles = [];
+  renderAttachedFiles();
+  chatMessages.innerHTML = '';
+  if (chatWelcome) chatWelcome.style.display = '';
+  renderSidebar();
+  userInput.focus();
+}
+
+function loadChat(id) {
+  const chat = getChats().find(c => c.id === id);
+  if (!chat) return;
+  currentChatId = id;
+  conversationHistory = [...chat.history];
+  chatMessages.innerHTML = '';
+  if (chatWelcome) chatWelcome.style.display = 'none';
+  for (const turn of conversationHistory) {
+    if (turn.role === 'user') {
+      appendUserMessage(turn.content, []);
+    } else if (turn.role === 'assistant') {
+      const bubble = appendAssistantMessage('', false);
+      updateAssistantMessage(bubble, turn.content, false);
+    }
+  }
+  renderSidebar();
+  scrollToBottom();
+}
+
+function chatTitle(text, files) {
+  const raw = (text || (files.length ? files[0].file.name : 'Chat')).trim().replace(/\s+/g, ' ');
+  return raw.length > 45 ? raw.slice(0, 45) + '…' : raw;
+}
+
+function formatDate(ts) {
+  const d = new Date(ts);
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (d.toDateString() === today.toDateString()) return 'Heute';
+  if (d.toDateString() === yesterday.toDateString()) return 'Gestern';
+  return d.toLocaleDateString('de-DE', { day: 'numeric', month: 'short' });
+}
+
+function renderSidebar() {
+  const listEl = document.getElementById('chatHistoryList');
+  if (!listEl) return;
+  const chats = getChats();
+  if (chats.length === 0) {
+    listEl.innerHTML = '<div class="chat-history-empty">Noch keine gespeicherten Chats</div>';
+    return;
+  }
+  listEl.innerHTML = chats.map(c => {
+    const active = c.id === currentChatId ? ' active' : '';
+    return `<div class="chat-item${active}" onclick="loadChat('${c.id}')">
+      <div class="chat-item-body">
+        <div class="chat-item-title">${escapeHtml(c.title)}</div>
+        <div class="chat-item-date">${formatDate(c.updated)}</div>
+      </div>
+      <button class="chat-item-delete" onclick="event.stopPropagation();deleteChat('${c.id}')" title="Löschen">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+          <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
+        </svg>
+      </button>
+    </div>`;
+  }).join('');
+}
+
+document.getElementById('newChatBtn').addEventListener('click', startNewChat);
+
 // ---- Modell-Selector laden ----
 async function loadModels() {
   try {
@@ -170,6 +287,9 @@ async function sendMessage() {
   if (chatWelcome) chatWelcome.style.display = 'none';
 
   const files = [...attachedFiles];
+  const isNewChat = currentChatId === null;
+  if (isNewChat) currentChatId = newUUID();
+  const newTitle = isNewChat ? chatTitle(text, files) : null;
 
   // Polling stoppen (Jobs laufen server-seitig weiter, aber wir brauchen sie nicht mehr)
   files.forEach(entry => {
@@ -252,10 +372,12 @@ async function sendMessage() {
 
     updateAssistantMessage(assistantBubble, fullResponse, false);
     conversationHistory.push({role: 'assistant', content: fullResponse});
+    saveCurrentChat(newTitle);
 
   } catch (err) {
     updateAssistantMessage(assistantBubble, `⚠️ Verbindungsfehler: ${err.message}`, false);
     conversationHistory.push({role: 'assistant', content: `Fehler: ${err.message}`});
+    saveCurrentChat(newTitle);
   } finally {
     setSending(false);
     scrollToBottom();
@@ -389,4 +511,5 @@ function renderMarkdown(text) {
 
 // ---- Init ----
 loadModels();
+renderSidebar();
 userInput.focus();

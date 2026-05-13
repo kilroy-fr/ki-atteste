@@ -4,7 +4,11 @@
       "Bash(ls \"c:\\\\Users\\\\Jan.DOMAIN\\\\\" | head -30)",
       "Read(//c/Users/**)",
       "PowerShell(curl http://localhost:11434/api/tags 2>$null)",
-      "PowerShell(python -m json.tool 2>$null)"
+      "PowerShell(python -m json.tool 2>$null)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(git push *)",
+      "Bash(docker compose *)"
     ],
     "additionalDirectories": [
       "C:\\Users\\Jan.DOMAIN\\caddy-proxy"

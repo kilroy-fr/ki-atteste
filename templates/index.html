@@ -14,11 +14,7 @@
   <div class="page-header">
     <div class="header-container">
       <div class="header-left">
-        <svg class="logo-svg" viewBox="0 0 60 60" xmlns="http://www.w3.org/2000/svg">
-          <rect width="60" height="60" rx="10" fill="#10b981"/>
-          <path d="M30 12 L30 48 M18 30 L42 30" stroke="white" stroke-width="6" stroke-linecap="round"/>
-          <path d="M20 18 Q30 10 40 18" stroke="white" stroke-width="3" fill="none" stroke-linecap="round"/>
-        </svg>
+        <img src="{{ url_for('static', filename='logo.jpg') }}" alt="Logo" class="logo">
         <div>
           <h1>KI-Atteste</h1>
           <p class="page-subtitle">Medizinische Atteste & Zeugnisse mit lokaler KI</p>
@@ -32,6 +28,21 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <!-- APP BODY: Sidebar + Main -->
+  <div class="app-body">
+
+  <!-- SIDEBAR -->
+  <div class="sidebar" id="sidebar">
+    <button class="new-chat-btn" id="newChatBtn" title="Neuer Chat">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+        <path d="M12 20h9"/>
+        <path d="M16.5 3.5a2.121 2.121 0 013 3L7 19l-4 1 1-4L16.5 3.5z"/>
+      </svg>
+      Neuer Chat
+    </button>
+    <div class="chat-history-list" id="chatHistoryList"></div>
   </div>
 
   <!-- MAIN LAYOUT -->
@@ -87,7 +98,8 @@
       </div>
     </div>
 
-  </div>
+  </div><!-- /.main-layout -->
+  </div><!-- /.app-body -->
 
   <!-- Spinner Overlay -->
   <div id="spinnerOverlay" style="display:none;">

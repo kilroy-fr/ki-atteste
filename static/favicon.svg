@@ -1,5 +1,35 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <rect width="64" height="64" rx="12" fill="#10b981"/>
-  <path d="M32 14 L32 50 M18 32 L46 32" stroke="white" stroke-width="7" stroke-linecap="round"/>
-  <path d="M21 20 Q32 12 43 20" stroke="white" stroke-width="3" fill="none" stroke-linecap="round"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 64 64"
+  width="64"
+  height="64"
+>
+  <!-- Hintergrund -->
+  <rect width="64" height="64" fill="#ffffff"/>
+
+  <!-- Praxis-Kreuz -->
+  <rect x="28" y="14" width="8" height="36" fill="#984649"/>
+  <rect x="14" y="28" width="36" height="8" fill="#984649"/>
+
+  <!-- A im Arial-/Sans-Style -->
+  <path
+    d="
+      M42 60
+      L48 34
+      L53 34
+      L60 60
+      L55 60
+      L53.5 53
+      L47.5 53
+      L46 60
+      Z
+
+      M48.5 49
+      L52.5 49
+      L50.5 39
+      Z
+    "
+    fill="#555555"
+  />
 </svg>
