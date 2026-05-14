@@ -20,6 +20,8 @@ app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-production")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434")
+OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "32768"))
+MAX_FILE_CHARS = int(os.environ.get("MAX_FILE_CHARS", "80000"))
 
 WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
 WHISPER_DOWNLOAD_ROOT = "/app/models/whisper"
@@ -331,8 +333,18 @@ def chat():
             file_texts.append(f"--- Datei: {f.filename} ---\n{text}")
 
     if file_texts:
+        combined_files = "\n\n".join(file_texts)
+        if len(combined_files) > MAX_FILE_CHARS:
+            combined_files = combined_files[:MAX_FILE_CHARS]
+            truncation_note = (
+                f"\n\n[HINWEIS: Die hochgeladenen Dokumente wurden auf {MAX_FILE_CHARS // 1000} k Zeichen "
+                f"gekürzt. Spätere Dokumente oder Seitenenden können fehlen.]"
+            )
+        else:
+            truncation_note = ""
         full_content = (
-            "\n\n".join(file_texts)
+            combined_files
+            + truncation_note
             + "\n\n---\nAufgabe: " + user_message
             + "\n\n[Antworte AUSSCHLIESSLICH auf Deutsch und verzichte auf Disclaimer.]"
         )
@@ -356,9 +368,9 @@ def chat():
         try:
             resp = requests.post(
                 f"{OLLAMA_BASE_URL}/api/chat",
-                json={"model": model, "messages": messages, "stream": True},
+                json={"model": model, "messages": messages, "stream": True, "options": {"num_ctx": OLLAMA_NUM_CTX}},
                 stream=True,
-                timeout=120,
+                timeout=300,
             )
             resp.raise_for_status()
             for line in resp.iter_lines():

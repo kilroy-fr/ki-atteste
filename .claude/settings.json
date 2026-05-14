@@ -8,10 +8,13 @@
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
-      "Bash(docker compose *)"
+      "Bash(docker compose *)",
+      "Bash(docker exec *)"
     ],
     "additionalDirectories": [
-      "C:\\Users\\Jan.DOMAIN\\caddy-proxy"
+      "C:\\Users\\Jan.DOMAIN\\caddy-proxy",
+      "C:\\Users\\Jan.DOMAIN\\ocr-service\\services",
+      "C:\\Users\\Jan.DOMAIN\\ocr-service"
     ]
   }
 }
