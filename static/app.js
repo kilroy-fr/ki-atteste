@@ -16,6 +16,54 @@ let conversationHistory = [];
 let attachedFiles = [];
 let isStreaming = false;
 let currentAbortController = null;
+let currentMode = 'medical';
+
+const MODE_CONFIG = {
+  medical: {
+    icon: '🏥',
+    title: 'Medizinische Atteste erstellen',
+    subtitle: 'Stellen Sie Ihre Anfrage oder laden Sie Dokumente hoch, um ein Attest zu erstellen.',
+    examples: [
+      'Begründung für eine Rehamaßnahme',
+      'Ärztliches Attest für Behörde',
+      'Kurze Zusammenfassung der hochgeladenen Befunde',
+      'Entlassungsbrief formulieren',
+    ]
+  },
+  neutral: {
+    icon: '💬',
+    title: 'Allgemeiner Assistent',
+    subtitle: 'Stellen Sie beliebige Fragen oder laden Sie Dokumente zur Analyse hoch.',
+    examples: [
+      'Text zusammenfassen',
+      'Dokument übersetzen',
+      'E-Mail verfassen',
+      'Tabelle analysieren',
+    ]
+  }
+};
+
+function setMode(mode) {
+  if (!MODE_CONFIG[mode]) return;
+  currentMode = mode;
+  document.querySelectorAll('.mode-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  updateWelcomeScreen();
+}
+
+function updateWelcomeScreen() {
+  const el = document.getElementById('chatWelcome');
+  if (!el) return;
+  const cfg = MODE_CONFIG[currentMode];
+  el.innerHTML =
+    '<div class="welcome-icon">' + cfg.icon + '</div>' +
+    '<h2>' + cfg.title + '</h2>' +
+    '<p>' + cfg.subtitle + '</p>' +
+    '<div class="welcome-examples">' +
+    cfg.examples.map(ex => '<button class="example-btn" onclick="setExample(this)">' + escapeHtml(ex) + '</button>').join('') +
+    '</div>';
+}
 
 // ============================================================
 // CHAT PERSISTENZ (localStorage)
@@ -48,7 +96,7 @@ function saveCurrentChat(title) {
     chats[idx].updated = now;
     if (title) chats[idx].title = title;
   } else {
-    chats.unshift({ id: currentChatId, title: title || 'Chat', created: now, updated: now, history: [...conversationHistory] });
+    chats.unshift({ id: currentChatId, title: title || 'Chat', created: now, updated: now, history: [...conversationHistory], mode: currentMode });
     if (chats.length > 50) chats.length = 50;
   }
   chats.sort((a, b) => b.updated - a.updated);
@@ -79,6 +127,7 @@ function loadChat(id) {
   if (!chat) return;
   currentChatId = id;
   conversationHistory = [...chat.history];
+  setMode(chat.mode || 'medical');
   chatMessages.innerHTML = '';
   if (chatWelcome) chatWelcome.style.display = 'none';
   for (const turn of conversationHistory) {
@@ -133,6 +182,15 @@ function renderSidebar() {
 }
 
 document.getElementById('newChatBtn').addEventListener('click', startNewChat);
+
+document.querySelectorAll('.mode-tab').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.mode;
+    if (mode === currentMode) return;
+    setMode(mode);
+    if (conversationHistory.length > 0) startNewChat();
+  });
+});
 
 // ---- Modell-Selector laden ----
 async function loadModels() {
@@ -316,6 +374,7 @@ async function sendMessage() {
   formData.append('message', text);
   formData.append('history', JSON.stringify(conversationHistory.slice(0, -1)));
   formData.append('model', modelSelect.value);
+  formData.append('mode', currentMode);
 
   // Vorextrahierte OCR-Texte separat schicken; Dateien ohne OCR direkt anhängen
   const preExtracted = {};
@@ -535,4 +594,5 @@ function renderMarkdown(text) {
 // ---- Init ----
 loadModels();
 renderSidebar();
+updateWelcomeScreen();
 userInput.focus();

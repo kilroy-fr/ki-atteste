@@ -48,19 +48,15 @@
   <!-- MAIN LAYOUT -->
   <div class="main-layout">
 
+    <!-- MODE TABS -->
+    <div class="mode-tabs-bar">
+      <button class="mode-tab active" data-mode="medical">🏥 Medizinische Atteste</button>
+      <button class="mode-tab" data-mode="neutral">💬 Allgemeiner Assistent</button>
+    </div>
+
     <!-- CHAT AREA -->
     <div class="chat-area" id="chatArea">
-      <div class="chat-welcome" id="chatWelcome">
-        <div class="welcome-icon">🏥</div>
-        <h2>Medizinische Atteste erstellen</h2>
-        <p>Stellen Sie Ihre Anfrage oder laden Sie Dokumente hoch, um ein Attest zu erstellen.</p>
-        <div class="welcome-examples">
-          <button class="example-btn" onclick="setExample(this)">Begründung für eine Rehamaßnahme</button>
-          <button class="example-btn" onclick="setExample(this)">Ärztliches Attest für Behörde</button>
-          <button class="example-btn" onclick="setExample(this)">Kurze Zusammenfassung der hochgeladenen Befunde</button>
-          <button class="example-btn" onclick="setExample(this)">Entlassungsbrief formulieren</button>
-        </div>
-      </div>
+      <div class="chat-welcome" id="chatWelcome"></div>
       <div class="chat-messages" id="chatMessages"></div>
     </div>
 

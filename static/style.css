@@ -258,6 +258,36 @@ body {
 }
 
 /* ============================================ */
+/* MODE TABS */
+/* ============================================ */
+.mode-tabs-bar {
+  flex-shrink: 0;
+  display: flex;
+  gap: 2px;
+  padding: 10px 0 0 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.mode-tab {
+  padding: 8px 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.88rem;
+  font-family: var(--font);
+  font-weight: 500;
+  transition: color 0.2s, border-color 0.2s;
+  margin-bottom: -1px;
+  border-radius: 4px 4px 0 0;
+  white-space: nowrap;
+}
+
+.mode-tab:hover { color: var(--text); background: rgba(255,255,255,0.04); }
+.mode-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+/* ============================================ */
 /* CHAT AREA */
 /* ============================================ */
 .chat-area {

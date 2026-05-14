@@ -35,6 +35,9 @@ DEFAULT_MODEL = "qwen2.5:14b"
 _PROMPT_FILE = Path(__file__).parent / "prompts" / "system_prompt.md"
 SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").strip()
 
+_PROMPT_NEUTRAL_FILE = Path(__file__).parent / "prompts" / "system_prompt_neutral.md"
+SYSTEM_PROMPT_NEUTRAL = _PROMPT_NEUTRAL_FILE.read_text(encoding="utf-8").strip()
+
 # ---- Deckblatt-Erkennung (wie im ocr-service) ----
 _COVER_KEYWORDS = [
     "fax", "deckblatt", "faxnummer", "telefax", "fax-deckblatt", "faxseiten", "faxgerät",
@@ -252,7 +255,9 @@ def chat():
     if not full_content:
         return jsonify({"error": "Keine Nachricht eingegeben"}), 400
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    mode = request.form.get("mode", "medical")
+    active_prompt = SYSTEM_PROMPT_NEUTRAL if mode == "neutral" else SYSTEM_PROMPT
+    messages = [{"role": "system", "content": active_prompt}]
     for turn in history:
         role = turn.get("role", "user")
         content = turn.get("content", "")
