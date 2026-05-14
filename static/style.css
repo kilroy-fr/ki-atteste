@@ -608,6 +608,12 @@ body {
   border-color: var(--primary);
 }
 
+.input-row.drag-over {
+  border-color: var(--primary);
+  background: rgba(16, 185, 129, 0.07);
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.18);
+}
+
 .input-wrapper {
   flex: 1;
   min-width: 0;

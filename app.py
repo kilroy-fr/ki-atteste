@@ -57,9 +57,22 @@ EXCLUDED_MODELS = {
     "llama3.1:8b",
     "deepseek-r1:8b",
     "gemma4:e2b",
+    "qwen2.5:7b",
 }
 
-DEFAULT_MODEL = "qwen2.5:14b"
+MODEL_DESCRIPTIONS: dict[str, str] = {
+    "qwen2.5:14b":         "Bewährt, stabil – Vorgängergeneration",
+    "qwen3:14b":           "Empfohlen – aktuell, gutes Deutsch (Thinking)",
+    "qwen3:8b":            "Schneller, leicht geringere Qualität",
+    "deepseek-r1:14b":     "Sehr präzise, aber langsam (Reasoning)",
+    "gemma4:26b":          "Sehr stark, aber ressourcenintensiv",
+    "gemma4:e4b":          "Kompakt & effizient (Gemma 4)",
+    "phi4:latest":         "Präzise Struktur, kompakter Speicherbedarf",
+    "mistral-nemo:latest": "Schnell, gut für einfache Texte",
+    "gpt-oss:20b":         "Experimentell – GPT-ähnlich",
+}
+
+DEFAULT_MODEL = "qwen3:14b"
 TITLE_MODEL = os.environ.get("TITLE_MODEL", "llama3.2:3b")
 
 _PROMPT_FILE = Path(__file__).parent / "prompts" / "system_prompt.md"
@@ -164,11 +177,17 @@ def api_models():
         resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
         resp.raise_for_status()
         all_models = resp.json().get("models", [])
-        filtered = [m["name"] for m in all_models if m["name"] not in EXCLUDED_MODELS]
+        filtered = sorted(
+            [m for m in all_models if m["name"] not in EXCLUDED_MODELS],
+            key=lambda m: m.get("size", 0),
+            reverse=True,
+        )
+        filtered_names = [m["name"] for m in filtered]
         current = session.get("selected_model", DEFAULT_MODEL)
-        if current not in filtered and filtered:
-            current = filtered[0]
-        return jsonify({"models": filtered, "selected": current})
+        if current not in filtered_names and filtered_names:
+            current = filtered_names[0]
+        descriptions = {m: MODEL_DESCRIPTIONS[m] for m in filtered_names if m in MODEL_DESCRIPTIONS}
+        return jsonify({"models": filtered_names, "selected": current, "descriptions": descriptions})
     except Exception as e:
         return jsonify({"models": [], "selected": DEFAULT_MODEL, "error": str(e)})
 

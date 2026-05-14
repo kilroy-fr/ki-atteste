@@ -243,10 +243,11 @@ async function loadModels() {
       modelSelect.appendChild(opt);
       return;
     }
+    const desc = data.descriptions || {};
     data.models.forEach(m => {
       const opt = document.createElement('option');
       opt.value = m;
-      opt.textContent = m;
+      opt.textContent = desc[m] ? m + ' – ' + desc[m] : m;
       if (m === data.selected) opt.selected = true;
       modelSelect.appendChild(opt);
     });
@@ -351,6 +352,49 @@ function removeFile(idx) {
   attachedFiles.splice(idx, 1);
   renderAttachedFiles();
 }
+
+// ---- Drag & Drop ----
+const inputArea = document.querySelector('.input-area');
+const inputRow  = document.querySelector('.input-row');
+let dragCounter = 0;
+
+// Prevent browser from opening dropped files
+document.addEventListener('dragover', e => e.preventDefault());
+document.addEventListener('drop',     e => e.preventDefault());
+
+inputArea.addEventListener('dragenter', e => {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  e.preventDefault();
+  dragCounter++;
+  if (dragCounter === 1) inputRow.classList.add('drag-over');
+});
+
+inputArea.addEventListener('dragleave', e => {
+  e.preventDefault();
+  dragCounter--;
+  if (dragCounter === 0) inputRow.classList.remove('drag-over');
+});
+
+inputArea.addEventListener('dragover', e => {
+  if (!e.dataTransfer.types.includes('Files')) return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'copy';
+});
+
+inputArea.addEventListener('drop', e => {
+  e.preventDefault();
+  dragCounter = 0;
+  inputRow.classList.remove('drag-over');
+  const accepted = /\.(pdf|docx|txt|jpg|jpeg)$/i;
+  Array.from(e.dataTransfer.files).filter(f => accepted.test(f.name)).forEach(f => {
+    if (attachedFiles.find(x => x.file.name === f.name)) return;
+    const needsOcr = /\.(jpg|jpeg|pdf)$/i.test(f.name);
+    const entry = { file: f, ocrJobId: null, ocrStatus: needsOcr ? 'pending' : 'none', ocrText: null, pollInterval: null };
+    attachedFiles.push(entry);
+    if (needsOcr) startOcr(entry);
+  });
+  renderAttachedFiles();
+});
 
 // ---- Textarea auto-resize ----
 userInput.addEventListener('input', () => {
