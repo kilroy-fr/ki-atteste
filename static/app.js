@@ -9,6 +9,7 @@ const sendBtn      = document.getElementById('sendBtn');
 const fileInput    = document.getElementById('fileInput');
 const attachedFilesEl = document.getElementById('attachedFiles');
 const modelSelect  = document.getElementById('modelSelect');
+const micBtn       = document.getElementById('micBtn');
 
 // Conversation history: [{role: 'user'|'assistant', content: '...'}]
 let conversationHistory = [];
@@ -96,7 +97,7 @@ function saveCurrentChat(title) {
     chats[idx].updated = now;
     if (title) chats[idx].title = title;
   } else {
-    chats.unshift({ id: currentChatId, title: title || 'Chat', created: now, updated: now, history: [...conversationHistory], mode: currentMode });
+    chats.unshift({ id: currentChatId, title: title || 'Chat', titlePending: true, created: now, updated: now, history: [...conversationHistory], mode: currentMode });
     if (chats.length > 50) chats.length = 50;
   }
   chats.sort((a, b) => b.updated - a.updated);
@@ -147,6 +148,43 @@ function chatTitle(text, files) {
   return raw.length > 45 ? raw.slice(0, 45) + '…' : raw;
 }
 
+function _patchSidebarTitle(chatId, newTitle) {
+  const itemEl = document.querySelector(`.chat-item[data-chat-id="${chatId}"]`);
+  if (!itemEl) { renderSidebar(); return; }
+  const titleEl = itemEl.querySelector('.chat-item-title');
+  if (!titleEl) { renderSidebar(); return; }
+  if (newTitle) titleEl.textContent = newTitle;
+  titleEl.classList.remove('generating');
+}
+
+async function generateChatTitle(chatId, userMessage, assistantResponse) {
+  try {
+    const res = await fetch('/api/title', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        message: userMessage.slice(0, 600),
+        response: assistantResponse.slice(0, 800),
+      })
+    });
+    if (!res.ok) { _patchSidebarTitle(chatId, null); return; }
+    const data = await res.json();
+    const chats = getChats();
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat) return;
+    if (data.title) chat.title = data.title;
+    chat.titlePending = false;
+    saveChats(chats);
+    _patchSidebarTitle(chatId, data.title || null);
+  } catch (e) {
+    console.error('[title]', e);
+    const chats = getChats();
+    const chat = chats.find(c => c.id === chatId);
+    if (chat) { chat.titlePending = false; saveChats(chats); }
+    _patchSidebarTitle(chatId, null);
+  }
+}
+
 function formatDate(ts) {
   const d = new Date(ts);
   const today = new Date();
@@ -167,9 +205,9 @@ function renderSidebar() {
   }
   listEl.innerHTML = chats.map(c => {
     const active = c.id === currentChatId ? ' active' : '';
-    return `<div class="chat-item${active}" onclick="loadChat('${c.id}')">
+    return `<div class="chat-item${active}" data-chat-id="${c.id}" onclick="loadChat('${c.id}')">
       <div class="chat-item-body">
-        <div class="chat-item-title">${escapeHtml(c.title)}</div>
+        <div class="chat-item-title${c.titlePending ? ' generating' : ''}">${escapeHtml(c.title)}</div>
         <div class="chat-item-date">${formatDate(c.updated)}</div>
       </div>
       <button class="chat-item-delete" onclick="event.stopPropagation();deleteChat('${c.id}')" title="Löschen">
@@ -440,6 +478,12 @@ async function sendMessage() {
     conversationHistory.push({role: 'assistant', content: fullResponse});
     saveCurrentChat(newTitle);
 
+    if (isNewChat && fullResponse.length > 30) {
+      const chatIdForTitle = currentChatId;
+      const userText = text || files.map(f => f.file.name).join(', ');
+      generateChatTitle(chatIdForTitle, userText, fullResponse);
+    }
+
   } catch (err) {
     if (err.name === 'AbortError') {
       const partial = fullResponse || '*(Abgebrochen)*';
@@ -588,6 +632,92 @@ function renderMarkdown(text) {
     return marked.parse(text);
   } catch(_) {
     return escapeHtml(text).replace(/\n/g, '<br>');
+  }
+}
+
+// ---- Spracheingabe ----
+const MIC_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
+const STOP_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>';
+const SPIN_ICON = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="mic-spin"><path d="M12 2a10 10 0 1 0 10 10" stroke-linecap="round"/></svg>';
+
+let mediaRecorder = null;
+let audioChunks = [];
+let isRecording = false;
+
+function setMicState(state) {
+  micBtn.dataset.state = state;
+  if (state === 'recording') {
+    micBtn.innerHTML = STOP_ICON;
+    micBtn.title = 'Aufnahme stoppen';
+    micBtn.disabled = false;
+  } else if (state === 'processing') {
+    micBtn.innerHTML = SPIN_ICON;
+    micBtn.title = 'Transkribiere…';
+    micBtn.disabled = true;
+  } else {
+    micBtn.innerHTML = MIC_ICON;
+    micBtn.title = 'Spracheingabe';
+    micBtn.disabled = false;
+  }
+}
+
+micBtn.addEventListener('click', async () => {
+  if (isRecording) {
+    stopRecording();
+  } else {
+    await startRecording();
+  }
+});
+
+async function startRecording() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    audioChunks = [];
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus'
+      : 'audio/webm';
+    mediaRecorder = new MediaRecorder(stream, { mimeType });
+    mediaRecorder.ondataavailable = e => { if (e.data.size > 0) audioChunks.push(e.data); };
+    mediaRecorder.onstop = async () => {
+      stream.getTracks().forEach(t => t.stop());
+      await transcribeAudio();
+    };
+    mediaRecorder.start();
+    isRecording = true;
+    setMicState('recording');
+  } catch (e) {
+    console.error('Mikrofon-Fehler:', e);
+    alert('Mikrofon-Zugriff nicht möglich: ' + e.message);
+  }
+}
+
+function stopRecording() {
+  isRecording = false;
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+    mediaRecorder.stop();
+  }
+  setMicState('processing');
+}
+
+async function transcribeAudio() {
+  const blob = new Blob(audioChunks, { type: 'audio/webm' });
+  const formData = new FormData();
+  formData.append('audio', blob, 'recording.webm');
+  try {
+    const res = await fetch('/api/transcribe', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (data.text) {
+      const current = userInput.value.trimEnd();
+      userInput.value = current ? current + ' ' + data.text : data.text;
+      userInput.dispatchEvent(new Event('input'));
+      userInput.focus();
+    } else if (data.error) {
+      console.error('Transkriptions-Fehler:', data.error);
+    }
+  } catch (e) {
+    console.error('Transkriptions-Fehler:', e);
+  } finally {
+    setMicState('idle');
   }
 }
 

@@ -219,6 +219,13 @@ body {
 
 .chat-item.active .chat-item-title { color: var(--primary); }
 
+.chat-item-title.generating::after {
+  content: ' ·';
+  animation: title-blink 1s step-start infinite;
+  opacity: 0.5;
+}
+@keyframes title-blink { 50% { opacity: 0; } }
+
 .chat-item-date {
   font-size: 0.71rem;
   color: var(--text-muted);
@@ -677,6 +684,56 @@ body {
 .send-btn.cancel-mode:hover { background: #9b2c2c; transform: scale(1.05); }
 
 .send-btn svg { width: 16px; height: 16px; }
+
+.mic-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all 0.2s;
+  flex-shrink: 0;
+}
+
+.mic-btn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--secondary);
+  background: var(--card-bg);
+}
+
+.mic-btn[data-state="recording"] {
+  color: #ef4444;
+  border-color: #ef4444;
+  background: rgba(239, 68, 68, 0.12);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+
+.mic-btn[data-state="processing"] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.mic-btn svg { width: 16px; height: 16px; }
+
+.mic-spin {
+  animation: mic-rotate 0.9s linear infinite;
+  transform-origin: center;
+}
+
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
+  50%       { box-shadow: 0 0 0 5px rgba(239, 68, 68, 0); }
+}
+
+@keyframes mic-rotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
 
 .input-hint {
   text-align: center;

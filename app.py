@@ -1,8 +1,10 @@
+import gc
 import io
 import os
 import json
 import time
 import uuid
+import tempfile
 import threading
 import requests
 from pathlib import Path
@@ -11,12 +13,39 @@ import fitz  # PyMuPDF
 import pytesseract
 from PIL import Image
 from docx import Document
+from faster_whisper import WhisperModel
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-production")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434")
+
+WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
+WHISPER_DOWNLOAD_ROOT = "/app/models/whisper"
+_whisper_model: "WhisperModel | None" = None
+_whisper_lock = threading.Lock()
+
+
+def _get_whisper_model() -> "WhisperModel":
+    global _whisper_model
+    if _whisper_model is None:
+        _whisper_model = WhisperModel(
+            WHISPER_MODEL_SIZE,
+            device="cuda",
+            compute_type="float16",
+            download_root=WHISPER_DOWNLOAD_ROOT,
+        )
+    return _whisper_model
+
+
+def _unload_whisper_model() -> None:
+    global _whisper_model
+    if _whisper_model is not None:
+        del _whisper_model
+        _whisper_model = None
+        gc.collect()
+
 
 EXCLUDED_MODELS = {
     "nomic-embed-text:latest",
@@ -29,6 +58,7 @@ EXCLUDED_MODELS = {
 }
 
 DEFAULT_MODEL = "qwen2.5:14b"
+TITLE_MODEL = os.environ.get("TITLE_MODEL", "llama3.2:3b")
 
 _PROMPT_FILE = Path(__file__).parent / "prompts" / "system_prompt.md"
 SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").strip()
@@ -50,10 +80,39 @@ def _is_cover_page(text: str) -> bool:
         return True
     return sum(1 for h in _EMAIL_HEADERS if h in lower) >= 3
 
+
+def _extract_pdf_text(data: bytes) -> str:
+    doc = fitz.open(stream=data, filetype="pdf")
+    num_pages = len(doc)
+    if num_pages == 0:
+        doc.close()
+        return ""
+    total_chars = sum(len((p.get_text() or "").strip()) for p in doc)
+    if total_chars >= 100:
+        page_texts = [(p.get_text() or "").strip() for p in doc]
+    else:
+        page_texts = []
+        for p in doc:
+            pix = p.get_pixmap(matrix=fitz.Matrix(2, 2))
+            img = Image.open(io.BytesIO(pix.tobytes("png")))
+            page_texts.append(pytesseract.image_to_string(img, lang="deu"))
+    doc.close()
+    start = 1 if num_pages > 1 and _is_cover_page(page_texts[0]) else 0
+    return "\n\n".join(page_texts[start:]).strip()
+
+
 # ---- OCR-Jobs (In-Memory) ----
-# {job_id: {"status": "pending"|"done"|"error", "text": str}}
+# {job_id: {"status": "pending"|"done"|"error", "text": str, "created_at": float}}
 _ocr_jobs: dict = {}
 _ocr_lock = threading.Lock()
+_OCR_JOB_TTL = 1800  # 30 Minuten
+
+
+def _cleanup_ocr_jobs() -> None:
+    cutoff = time.time() - _OCR_JOB_TTL
+    expired = [jid for jid, j in _ocr_jobs.items() if j["status"] in ("done", "error") and j.get("created_at", 0) < cutoff]
+    for jid in expired:
+        del _ocr_jobs[jid]
 
 
 def _ocr_run(job_id: str, data: bytes, filename: str) -> None:
@@ -62,46 +121,15 @@ def _ocr_run(job_id: str, data: bytes, filename: str) -> None:
         if fn.endswith((".jpg", ".jpeg")):
             img = Image.open(io.BytesIO(data))
             text = pytesseract.image_to_string(img, lang="deu").strip()
-
         elif fn.endswith(".pdf"):
-            doc = fitz.open(stream=data, filetype="pdf")
-            num_pages = len(doc)
-            if num_pages == 0:
-                doc.close()
-                with _ocr_lock:
-                    _ocr_jobs[job_id] = {"status": "done", "text": ""}
-                return
-
-            # Entscheide: Textbasiert oder bildbasiert?
-            total_chars = sum(len((p.get_text() or "").strip()) for p in doc)
-            if total_chars >= 100:
-                page_texts = [(p.get_text() or "").strip() for p in doc]
-            else:
-                # Bildbasiertes PDF: Seiten rendern und OCR
-                page_texts = []
-                for p in doc:
-                    mat = fitz.Matrix(2, 2)
-                    pix = p.get_pixmap(matrix=mat)
-                    img = Image.open(io.BytesIO(pix.tobytes("png")))
-                    page_texts.append(pytesseract.image_to_string(img, lang="deu"))
-
-            doc.close()
-
-            # Deckblatt überspringen
-            start = 0
-            if num_pages > 1 and _is_cover_page(page_texts[0]):
-                start = 1
-            text = "\n\n".join(page_texts[start:]).strip()
-
+            text = _extract_pdf_text(data)
         else:
             text = ""
-
         with _ocr_lock:
-            _ocr_jobs[job_id] = {"status": "done", "text": text}
-
+            _ocr_jobs[job_id] = {"status": "done", "text": text, "created_at": _ocr_jobs[job_id].get("created_at", time.time())}
     except Exception as e:
         with _ocr_lock:
-            _ocr_jobs[job_id] = {"status": "error", "text": f"[OCR-Fehler: {e}]"}
+            _ocr_jobs[job_id] = {"status": "error", "text": f"[OCR-Fehler: {e}]", "created_at": _ocr_jobs[job_id].get("created_at", time.time())}
 
 
 def _get_version():
@@ -134,12 +162,7 @@ def api_models():
         resp = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=5)
         resp.raise_for_status()
         all_models = resp.json().get("models", [])
-        filtered = [
-            m["name"]
-            for m in all_models
-            if m["name"] not in EXCLUDED_MODELS
-            and not any(m["name"].startswith(ex.split(":")[0] + ":") and m["name"] in EXCLUDED_MODELS for ex in EXCLUDED_MODELS)
-        ]
+        filtered = [m["name"] for m in all_models if m["name"] not in EXCLUDED_MODELS]
         current = session.get("selected_model", DEFAULT_MODEL)
         if current not in filtered and filtered:
             current = filtered[0]
@@ -158,6 +181,78 @@ def set_model():
     return resp
 
 
+@app.route("/api/title", methods=["POST"])
+def api_title():
+    data = request.get_json() or {}
+    message = (data.get("message") or "").strip()[:600]
+    response = (data.get("response") or "").strip()[:800]
+    model = TITLE_MODEL
+
+    if not message and not response:
+        return jsonify({"title": None}), 400
+
+    prompt = (
+        "Erstelle einen kurzen, prägnanten Titel (maximal 6 Wörter) auf Deutsch für dieses Gespräch. "
+        "Antworte NUR mit dem Titel, ohne Anführungszeichen, ohne Erklärungen, ohne Satzzeichen am Ende.\n\n"
+        f"Benutzer: {message}\n"
+        f"Assistent: {response}"
+    )
+
+    try:
+        resp = requests.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json={"model": model, "messages": [{"role": "user", "content": prompt}], "stream": False, "options": {"temperature": 0.3, "num_predict": 25}},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        title = resp.json().get("message", {}).get("content", "").strip().strip('"\'').strip()
+        # strip common model prefixes like "Titel: " or "Title: "
+        for prefix in ("titel:", "title:"):
+            if title.lower().startswith(prefix):
+                title = title[len(prefix):].strip().strip('"\'').strip()
+                break
+        if not title:
+            return jsonify({"title": None})
+        if len(title) > 60:
+            title = title[:60].rsplit(" ", 1)[0] + "…"
+        return jsonify({"title": title})
+    except Exception as e:
+        return jsonify({"title": None, "error": str(e)})
+
+
+# ---- Sprach-Transkription (faster-whisper) ----
+@app.route("/api/transcribe", methods=["POST"])
+def api_transcribe():
+    audio_file = request.files.get("audio")
+    if not audio_file:
+        return jsonify({"error": "Keine Audio-Datei"}), 400
+    audio_data = audio_file.read()
+    if not audio_data:
+        return jsonify({"error": "Leere Audio-Datei"}), 400
+
+    with _whisper_lock:
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
+                tmp.write(audio_data)
+                tmp_path = tmp.name
+            model = _get_whisper_model()
+            segments, _ = model.transcribe(
+                tmp_path,
+                language="de",
+                beam_size=5,
+                vad_filter=True,
+            )
+            text = " ".join(seg.text for seg in segments).strip()
+            return jsonify({"text": text})
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+        finally:
+            if tmp_path and os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+            _unload_whisper_model()
+
+
 # ---- OCR-Endpoint: Datei hochladen, Job starten ----
 @app.route("/api/ocr", methods=["POST"])
 def api_ocr_start():
@@ -169,7 +264,8 @@ def api_ocr_start():
     job_id = str(uuid.uuid4())
 
     with _ocr_lock:
-        _ocr_jobs[job_id] = {"status": "pending", "text": ""}
+        _cleanup_ocr_jobs()
+        _ocr_jobs[job_id] = {"status": "pending", "text": "", "created_at": time.time()}
 
     t = threading.Thread(target=_ocr_run, args=(job_id, data, f.filename), daemon=True)
     t.start()
@@ -191,18 +287,7 @@ def extract_text_from_file(file_storage):
     filename = file_storage.filename.lower()
     try:
         if filename.endswith(".pdf"):
-            data = file_storage.read()
-            doc = fitz.open(stream=data, filetype="pdf")
-            num_pages = len(doc)
-            if num_pages == 0:
-                doc.close()
-                return ""
-            page_texts = [(p.get_text() or "").strip() for p in doc]
-            doc.close()
-            start = 0
-            if num_pages > 1 and _is_cover_page(page_texts[0]):
-                start = 1
-            return "\n\n".join(page_texts[start:]).strip()
+            return _extract_pdf_text(file_storage.read())
         elif filename.endswith(".docx"):
             data = file_storage.read()
             doc = Document(io.BytesIO(data))

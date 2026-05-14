@@ -12,10 +12,18 @@ services:
       - ./app.py:/app/app.py
       - ./templates:/app/templates
       - ./static:/app/static
+      - whisper-models:/app/models/whisper
     environment:
       - TZ=${TZ:-Europe/Berlin}
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     stdin_open: true
     tty: true
     extra_hosts:
@@ -29,3 +37,6 @@ networks:
   app-network:
     external: true
     name: ${DOCKER_NETWORK:-caddy-proxy-network}
+
+volumes:
+  whisper-models:
