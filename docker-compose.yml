@@ -8,7 +8,6 @@ services:
     ports:
       - "127.0.0.1:5010:5000"
     volumes:
-      - ./uploads:/app/uploads
       # Development: Hot-Reload durch Einbinden der Quelldateien
       - ./app.py:/app/app.py
       - ./templates:/app/templates

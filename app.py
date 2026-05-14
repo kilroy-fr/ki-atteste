@@ -17,8 +17,6 @@ app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-production")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB
 
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:11434")
-UPLOAD_FOLDER = "/app/uploads"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 EXCLUDED_MODELS = {
     "nomic-embed-text:latest",
@@ -248,7 +246,11 @@ def chat():
             file_texts.append(f"--- Datei: {f.filename} ---\n{text}")
 
     if file_texts:
-        full_content = "\n\n".join(file_texts) + "\n\n---\nAufgabe: " + user_message
+        full_content = (
+            "\n\n".join(file_texts)
+            + "\n\n---\nAufgabe: " + user_message
+            + "\n\n[Antworte AUSSCHLIESSLICH auf Deutsch und verzichte auf Disclaimer.]"
+        )
     else:
         full_content = user_message
 

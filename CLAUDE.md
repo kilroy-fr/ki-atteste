@@ -18,7 +18,6 @@ templates/index.html    Frontend (Jinja2-Template)
 static/app.js           Chat-Logik (SSE-Streaming)
 static/style.css        Styles
 static/favicon.svg      Icon
-uploads/                Hochgeladene Dateien (nicht in Git, Laufzeit-Volume)
 Dockerfile              Python 3.12-slim, libmupdf-dev
 docker-compose.yml      Single-Service-Stack
 .env / .env.example     Umgebungsvariablen
@@ -63,8 +62,8 @@ Der System-Prompt liegt in `prompts/system_prompt.md` und wird beim Start **zur 
 ## Datei-Upload
 
 - Max. 50 MB pro Request
-- Unterstützte Formate: PDF (via PyMuPDF), DOCX (via python-docx), TXT
-- Dateien werden temporär im Container unter `/app/uploads` abgelegt (Volume: `./uploads`)
+- Unterstützte Formate: PDF (via PyMuPDF, inkl. OCR für bildbasierte PDFs), DOCX (via python-docx), TXT, JPG/JPEG (via pytesseract)
+- Dateien werden **ausschließlich im Arbeitsspeicher** verarbeitet – es wird nichts auf die Disk geschrieben
 
 ## Caddy-Integration
 

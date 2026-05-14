@@ -2,14 +2,14 @@
 
 KI-gestützter Assistent für medizinische Fachkräfte zum Erstellen von Attesten, Gutachten und Berichten. Die App nutzt ein lokal laufendes LLM über [Ollama](https://ollama.com) und läuft vollständig offline ohne externe Dienste.
 
-**Version:** 0.1.1
+**Version:** siehe `VERSION`
 
 ---
 
 ## Features
 
 - Chat-Interface mit SSE-Streaming (Antworten erscheinen Token für Token)
-- Dokument-Upload: PDF, DOCX und TXT werden automatisch extrahiert und in den Kontext eingebettet
+- Dokument-Upload: PDF (inkl. OCR), DOCX, TXT und JPG werden automatisch extrahiert und in den Kontext eingebettet – vollständig im Arbeitsspeicher, keine Dateien auf der Disk
 - Modellauswahl zur Laufzeit aus allen verfügbaren Ollama-Modellen
 - System-Prompt speziell für deutschsprachige medizinische Atteste
 - Persistente Modellwahl per Cookie
@@ -80,7 +80,7 @@ Ollama (Host, Port 11434)
 ```
 
 - **Zustandslos:** Die Chathistory wird vollständig vom Browser im Request-Body mitgesendet; der Server hält keinen Session-State.
-- **Keine Datenbank:** Alle Daten liegen im Browser oder in hochgeladenen Dateien (temporär im Volume `./uploads`).
+- **Keine Datenbank:** Alle Daten liegen im Browser. Hochgeladene Dateien werden ausschließlich im Arbeitsspeicher verarbeitet und nie auf die Disk geschrieben.
 - **Caddy:** Der Container hängt am `caddy-proxy-network`. Caddy terminiert TLS und leitet auf Port 5000 weiter.
 
 ---
