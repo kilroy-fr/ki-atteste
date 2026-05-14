@@ -217,7 +217,7 @@ def extract_text_from_file(file_storage):
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    model = session.get("selected_model", DEFAULT_MODEL)
+    model = request.form.get("model") or session.get("selected_model", DEFAULT_MODEL)
 
     try:
         history = json.loads(request.form.get("history", "[]"))

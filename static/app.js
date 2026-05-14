@@ -315,6 +315,7 @@ async function sendMessage() {
   const formData = new FormData();
   formData.append('message', text);
   formData.append('history', JSON.stringify(conversationHistory.slice(0, -1)));
+  formData.append('model', modelSelect.value);
 
   // Vorextrahierte OCR-Texte separat schicken; Dateien ohne OCR direkt anhängen
   const preExtracted = {};
