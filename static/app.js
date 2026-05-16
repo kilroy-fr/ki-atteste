@@ -270,20 +270,16 @@ modelSelect.addEventListener('change', async () => {
 });
 
 // ---- Datei-Anhänge ----
+function addFile(file) {
+  if (attachedFiles.find(x => x.file.name === file.name)) return;
+  const needsOcr = /\.(jpg|jpeg|pdf)$/i.test(file.name);
+  const entry = { file, ocrJobId: null, ocrStatus: needsOcr ? 'pending' : 'none', ocrText: null, pollInterval: null };
+  attachedFiles.push(entry);
+  if (needsOcr) startOcr(entry);
+}
+
 fileInput.addEventListener('change', () => {
-  Array.from(fileInput.files).forEach(f => {
-    if (attachedFiles.find(x => x.file.name === f.name)) return;
-    const needsOcr = /\.(jpg|jpeg|pdf)$/i.test(f.name);
-    const entry = {
-      file: f,
-      ocrJobId: null,
-      ocrStatus: needsOcr ? 'pending' : 'none',
-      ocrText: null,
-      pollInterval: null,
-    };
-    attachedFiles.push(entry);
-    if (needsOcr) startOcr(entry);
-  });
+  Array.from(fileInput.files).forEach(f => addFile(f));
   fileInput.value = '';
   renderAttachedFiles();
 });
@@ -386,13 +382,7 @@ inputArea.addEventListener('drop', e => {
   dragCounter = 0;
   inputRow.classList.remove('drag-over');
   const accepted = /\.(pdf|docx|txt|jpg|jpeg)$/i;
-  Array.from(e.dataTransfer.files).filter(f => accepted.test(f.name)).forEach(f => {
-    if (attachedFiles.find(x => x.file.name === f.name)) return;
-    const needsOcr = /\.(jpg|jpeg|pdf)$/i.test(f.name);
-    const entry = { file: f, ocrJobId: null, ocrStatus: needsOcr ? 'pending' : 'none', ocrText: null, pollInterval: null };
-    attachedFiles.push(entry);
-    if (needsOcr) startOcr(entry);
-  });
+  Array.from(e.dataTransfer.files).filter(f => accepted.test(f.name)).forEach(f => addFile(f));
   renderAttachedFiles();
 });
 

@@ -49,15 +49,16 @@ def _unload_whisper_model() -> None:
         gc.collect()
 
 
-EXCLUDED_MODELS = {
-    "nomic-embed-text:latest",
-    "nomic-embed-text",
-    "llama3.2:1b",
-    "llama3.2:3b",
-    "llama3.1:8b",
-    "deepseek-r1:8b",
-    "gemma4:e2b",
-    "qwen2.5:7b",
+ALLOWED_MODELS = {
+    "qwen2.5:14b",
+    "qwen3:14b",
+    "qwen3:8b",
+    "deepseek-r1:14b",
+    "gemma4:26b",
+    "gemma4:e4b",
+    "phi4:latest",
+    "mistral-nemo:latest",
+    "gpt-oss:20b",
 }
 
 MODEL_DESCRIPTIONS: dict[str, str] = {
@@ -178,7 +179,7 @@ def api_models():
         resp.raise_for_status()
         all_models = resp.json().get("models", [])
         filtered = sorted(
-            [m for m in all_models if m["name"] not in EXCLUDED_MODELS],
+            [m for m in all_models if m["name"] in ALLOWED_MODELS],
             key=lambda m: m.get("size", 0),
             reverse=True,
         )

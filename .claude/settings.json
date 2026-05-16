@@ -9,7 +9,9 @@
       "Bash(git commit -m ' *)",
       "Bash(git push *)",
       "Bash(docker compose *)",
-      "Bash(docker exec *)"
+      "Bash(docker exec *)",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(python -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(m['name'], m.get\\('size',0\\)//1024//1024, 'MB'\\) for m in sorted\\(data.get\\('models',[]\\), key=lambda x: x['name']\\)]\")"
     ],
     "additionalDirectories": [
       "C:\\Users\\Jan.DOMAIN\\caddy-proxy",
