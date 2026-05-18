@@ -1,10 +1,8 @@
-import gc
 import io
 import os
 import json
 import time
 import uuid
-import tempfile
 import threading
 import requests
 from pathlib import Path
@@ -13,7 +11,6 @@ import fitz  # PyMuPDF
 import pytesseract
 from PIL import Image
 from docx import Document
-from faster_whisper import WhisperModel
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-production")
@@ -23,30 +20,8 @@ OLLAMA_BASE_URL = os.environ.get("OLLAMA_URL", "http://host.docker.internal:1143
 OLLAMA_NUM_CTX = int(os.environ.get("OLLAMA_NUM_CTX", "32768"))
 MAX_FILE_CHARS = int(os.environ.get("MAX_FILE_CHARS", "80000"))
 
-WHISPER_MODEL_SIZE = os.environ.get("WHISPER_MODEL", "medium")
-WHISPER_DOWNLOAD_ROOT = "/app/models/whisper"
-_whisper_model: "WhisperModel | None" = None
-_whisper_lock = threading.Lock()
-
-
-def _get_whisper_model() -> "WhisperModel":
-    global _whisper_model
-    if _whisper_model is None:
-        _whisper_model = WhisperModel(
-            WHISPER_MODEL_SIZE,
-            device="cuda",
-            compute_type="float16",
-            download_root=WHISPER_DOWNLOAD_ROOT,
-        )
-    return _whisper_model
-
-
-def _unload_whisper_model() -> None:
-    global _whisper_model
-    if _whisper_model is not None:
-        del _whisper_model
-        _whisper_model = None
-        gc.collect()
+WHISPER_HOST = os.environ.get("WHISPER_HOST", "diktat-whisper")
+WHISPER_PORT = os.environ.get("WHISPER_PORT", "8000")
 
 
 ALLOWED_MODELS = {
@@ -242,7 +217,7 @@ def api_title():
         return jsonify({"title": None, "error": str(e)})
 
 
-# ---- Sprach-Transkription (faster-whisper) ----
+# ---- Sprach-Transkription (via diktat-whisper HTTP-API) ----
 @app.route("/api/transcribe", methods=["POST"])
 def api_transcribe():
     audio_file = request.files.get("audio")
@@ -252,27 +227,17 @@ def api_transcribe():
     if not audio_data:
         return jsonify({"error": "Leere Audio-Datei"}), 400
 
-    with _whisper_lock:
-        tmp_path = None
-        try:
-            with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
-                tmp.write(audio_data)
-                tmp_path = tmp.name
-            model = _get_whisper_model()
-            segments, _ = model.transcribe(
-                tmp_path,
-                language="de",
-                beam_size=5,
-                vad_filter=True,
-            )
-            text = " ".join(seg.text for seg in segments).strip()
-            return jsonify({"text": text})
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-        finally:
-            if tmp_path and os.path.exists(tmp_path):
-                os.unlink(tmp_path)
-            _unload_whisper_model()
+    try:
+        resp = requests.post(
+            f"http://{WHISPER_HOST}:{WHISPER_PORT}/v1/audio/transcriptions",
+            files={"file": ("audio.webm", audio_data, "audio/webm")},
+            data={"model": "whisper-1", "language": "de", "response_format": "json"},
+            timeout=120,
+        )
+        resp.raise_for_status()
+        return jsonify({"text": resp.json().get("text", "")})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ---- OCR-Endpoint: Datei hochladen, Job starten ----

@@ -12,26 +12,21 @@ services:
       - ./app.py:/app/app.py
       - ./templates:/app/templates
       - ./static:/app/static
-      - whisper-models:/app/models/whisper
     environment:
       - TZ=${TZ:-Europe/Berlin}
       - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
       - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
       - OLLAMA_NUM_CTX=${OLLAMA_NUM_CTX:-32768}
       - MAX_FILE_CHARS=${MAX_FILE_CHARS:-80000}
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
+      - WHISPER_HOST=${WHISPER_HOST:-diktat-whisper}
+      - WHISPER_PORT=${WHISPER_PORT:-8000}
     stdin_open: true
     tty: true
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
       - app-network
+      - diktat-network
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -39,6 +34,6 @@ networks:
   app-network:
     external: true
     name: ${DOCKER_NETWORK:-caddy-proxy-network}
-
-volumes:
-  whisper-models:
+  diktat-network:
+    external: true
+    name: diktat-network
