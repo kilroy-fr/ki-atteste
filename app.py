@@ -29,6 +29,7 @@ ALLOWED_MODELS = {
     "qwen3:14b",
     "qwen3:8b",
     "deepseek-r1:14b",
+    "gemma4:12b",
     "gemma4:26b",
     "gemma4:e4b",
     "phi4:latest",
@@ -41,6 +42,7 @@ MODEL_DESCRIPTIONS: dict[str, str] = {
     "qwen3:14b":           "Empfohlen – aktuell, gutes Deutsch (Thinking)",
     "qwen3:8b":            "Schneller, leicht geringere Qualität",
     "deepseek-r1:14b":     "Sehr präzise, aber langsam (Reasoning)",
+    "gemma4:12b":          "Ausgewogen – gutes Deutsch, moderate Ressourcen",
     "gemma4:26b":          "Sehr stark, aber ressourcenintensiv",
     "gemma4:e4b":          "Kompakt & effizient (Gemma 4)",
     "phi4:latest":         "Präzise Struktur, kompakter Speicherbedarf",
@@ -48,7 +50,7 @@ MODEL_DESCRIPTIONS: dict[str, str] = {
     "gpt-oss:20b":         "Experimentell – GPT-ähnlich",
 }
 
-DEFAULT_MODEL = "qwen3:14b"
+DEFAULT_MODEL = "gemma4:12b"
 TITLE_MODEL = os.environ.get("TITLE_MODEL", "llama3.2:3b")
 
 _PROMPT_FILE = Path(__file__).parent / "prompts" / "system_prompt.md"
