@@ -1,6 +1,6 @@
 # KI-Atteste
 
-KI-gestützter Assistent für medizinische Fachkräfte zum Erstellen von Attesten, Gutachten und Berichten. Die App nutzt ein lokal laufendes LLM über [Ollama](https://ollama.com) und läuft vollständig offline ohne externe Dienste.
+KI-gestützter Assistent für medizinische Fachkräfte zum Erstellen von Attesten, Gutachten und Berichten. Die App nutzt ein lokal laufendes LLM über [Ollama](https://ollama.com) und kommt ohne Cloud-Dienste aus.
 
 **Version:** siehe `VERSION`
 
@@ -9,11 +9,13 @@ KI-gestützter Assistent für medizinische Fachkräfte zum Erstellen von Atteste
 ## Features
 
 - Chat-Interface mit SSE-Streaming (Antworten erscheinen Token für Token)
-- Dokument-Upload: PDF (inkl. OCR), DOCX, TXT und JPG werden automatisch extrahiert und in den Kontext eingebettet – vollständig im Arbeitsspeicher, keine Dateien auf der Disk
-- Modellauswahl zur Laufzeit aus allen verfügbaren Ollama-Modellen
-- System-Prompt speziell für deutschsprachige medizinische Atteste
-- Persistente Modellwahl per Cookie
-- Vollständig offline – keine Cloud-Anbindung
+- **Zwei Modi:** „Medizinisch" für Atteste und Berichte, „Neutral" als allgemeiner Assistent
+- **Dokument-Upload:** PDF (inkl. OCR für gescannte Dokumente), DOCX, TXT und JPG – per Auswahl oder Drag & Drop, vollständig im Arbeitsspeicher, keine Dateien auf der Disk
+- **Deckblatt-Erkennung:** Fax- und Scan-Deckblätter sowie E-Mail-Header werden automatisch übersprungen
+- **Spracheingabe:** Diktat wird über einen lokalen Whisper-Service transkribiert
+- **Chat-Historie im Browser** mit automatisch generierten Titeln (localStorage, max. 50 Chats)
+- Modellauswahl zur Laufzeit aus einer kuratierten Liste, mit Kurzbeschreibung je Modell
+- Vollständig lokal – keine Cloud-Anbindung
 
 ---
 
@@ -21,14 +23,18 @@ KI-gestützter Assistent für medizinische Fachkräfte zum Erstellen von Atteste
 
 - Docker + Docker Compose
 - [Ollama](https://ollama.com) läuft auf dem Host (Standard-Port 11434)
-- Mindestens ein geeignetes Sprachmodell, z. B. `qwen2.5:14b`:
+- Mindestens ein Modell aus der Whitelist, z. B. das Standardmodell:
   ```bash
-  ollama pull qwen2.5:14b
+  ollama pull gemma4:12b
+  # kleines Modell für die automatische Chat-Titelvergabe
+  ollama pull llama3.2:3b
   ```
-- Externes Docker-Netzwerk `caddy-proxy-network` (für Caddy-Integration):
+- Externe Docker-Netzwerke:
   ```bash
   docker network create caddy-proxy-network
+  docker network create diktat-network
   ```
+- Der Whisper-Service `diktat-whisper` am `diktat-network` (nur für die Spracheingabe nötig; ohne ihn funktioniert der Rest normal)
 
 ---
 
@@ -47,8 +53,8 @@ cp .env.example .env
 docker compose up --build -d
 
 # 4. App aufrufen
-# direkt: http://localhost:5010
-# oder über Caddy: http://atteste2.domain.local
+# lokal auf dem Host: http://localhost:5010
+# oder über Caddy:    http://atteste2.domain.local
 ```
 
 ---
@@ -57,55 +63,85 @@ docker compose up --build -d
 
 Alle Einstellungen werden über `.env` gesetzt:
 
-| Variable         | Standard                            | Beschreibung                      |
-|------------------|-------------------------------------|-----------------------------------|
-| `SECRET_KEY`     | `change-me-in-production`           | Flask Session Secret (unbedingt ändern!) |
-| `OLLAMA_URL`     | `http://host.docker.internal:11434` | Ollama API-Endpunkt               |
-| `TZ`             | `Europe/Berlin`                     | Zeitzone im Container             |
-| `DOCKER_NETWORK` | `caddy-proxy-network`               | Externes Docker-Netzwerk          |
+| Variable         | Standard                            | Beschreibung                                          |
+|------------------|-------------------------------------|-------------------------------------------------------|
+| `SECRET_KEY`     | `change-me-in-production`           | Flask Session Secret (unbedingt ändern!)              |
+| `OLLAMA_URL`     | `http://host.docker.internal:11434` | Ollama API-Endpunkt                                   |
+| `OLLAMA_NUM_CTX` | `32768`                             | Kontextfenster pro Anfrage – höher = mehr RAM/VRAM    |
+| `MAX_FILE_CHARS` | `80000`                             | Obergrenze für hochgeladenen Dokumenttext je Anfrage  |
+| `WHISPER_HOST`   | `diktat-whisper`                    | Hostname des Whisper-Services                         |
+| `WHISPER_PORT`   | `8000`                              | Port des Whisper-Services                             |
+| `TITLE_MODEL`    | `llama3.2:3b`                       | Modell für die automatische Chat-Titelvergabe         |
+| `TZ`             | `Europe/Berlin`                     | Zeitzone im Container                                 |
+| `DOCKER_NETWORK` | `caddy-proxy-network`               | Externes Docker-Netzwerk für Caddy                    |
+
+---
+
+## Verfügbare Modelle
+
+Im Dropdown erscheinen nur Modelle, die in der Whitelist stehen **und** in Ollama installiert sind:
+
+| Modell                | Charakteristik                                   |
+|-----------------------|--------------------------------------------------|
+| `gemma4:12b`          | Standard – ausgewogen, gutes Deutsch             |
+| `gemma4:26b`          | Sehr stark, aber ressourcenintensiv              |
+| `gemma4:e4b`          | Kompakt & effizient                              |
+| `qwen3:14b`           | Empfohlen – aktuell, gutes Deutsch (Thinking)    |
+| `qwen3:8b`            | Schneller, leicht geringere Qualität             |
+| `qwen2.5:14b`         | Bewährt, stabil – Vorgängergeneration            |
+| `deepseek-r1:14b`     | Sehr präzise, aber langsam (Reasoning)           |
+| `phi4:latest`         | Präzise Struktur, kompakter Speicherbedarf       |
+| `mistral-nemo:latest` | Schnell, gut für einfache Texte                  |
+| `gpt-oss:20b`         | Experimentell – GPT-ähnlich                      |
+
+Weitere Modelle lassen sich in `ALLOWED_MODELS` und `MODEL_DESCRIPTIONS` in `app.py` ergänzen.
 
 ---
 
 ## Architektur
 
 ```
-Browser
+Browser  ── localStorage: Chat-Historie
   │  SSE-Stream (text/event-stream)
   ▼
 Flask (app.py, Port 5000)
-  │  REST POST /api/chat
-  ▼
-Ollama (Host, Port 11434)
-  └─ LLM (z. B. qwen2.5:14b)
+  ├─ POST /api/chat  ──────▶  Ollama (Host, Port 11434)
+  ├─ POST /api/ocr   ──────▶  PyMuPDF + Tesseract (im Container, asynchron)
+  └─ POST /api/transcribe ─▶  diktat-whisper (Port 8000)
 ```
 
-- **Zustandslos:** Die Chathistory wird vollständig vom Browser im Request-Body mitgesendet; der Server hält keinen Session-State.
-- **Keine Datenbank:** Alle Daten liegen im Browser. Hochgeladene Dateien werden ausschließlich im Arbeitsspeicher verarbeitet und nie auf die Disk geschrieben.
-- **Caddy:** Der Container hängt am `caddy-proxy-network`. Caddy terminiert TLS und leitet auf Port 5000 weiter.
+- **Zustandslos:** Die Chathistory wird vollständig vom Browser im Request-Body mitgesendet; der Server hält keinen Gesprächsverlauf.
+- **Keine Datenbank:** Chats liegen im localStorage des Browsers. Hochgeladene Dateien werden ausschließlich im Arbeitsspeicher verarbeitet und nie auf die Disk geschrieben.
+- **OCR asynchron:** Große Scans blockieren die Oberfläche nicht – der Upload startet einen Job, das Frontend pollt den Status. Die Jobs liegen im Prozessspeicher (TTL 30 Minuten), die App läuft daher bewusst mit einem einzigen Worker.
+- **Caddy:** Der Container hängt am `caddy-proxy-network`. Caddy terminiert TLS und leitet auf Port 5000 weiter. Port 5010 ist nur auf `127.0.0.1` gebunden.
 
 ---
 
 ## System-Prompt anpassen
 
-Der System-Prompt liegt in `prompts/system_prompt.md` und kann ohne Rebuild geändert werden. Nach einer Änderung Container neu starten:
+Die Prompts liegen in `prompts/system_prompt.md` (Modus „Medizinisch") und `prompts/system_prompt_neutral.md` (Modus „Neutral").
+
+Das Verzeichnis ist **nicht** als Volume eingebunden – nach einer Änderung ist ein Rebuild nötig:
 
 ```bash
-docker compose restart ki-atteste-web
+docker compose down && docker compose up --build -d
 ```
 
 ---
 
 ## Entwicklung
 
-Hot-Reload ist aktiv: `app.py`, `templates/` und `static/` sind als Volumes eingebunden.
+Hot-Reload ist aktiv: `app.py`, `templates/` und `static/` sind als Volumes eingebunden, Änderungen dort greifen sofort.
 
 ```bash
 # Logs live verfolgen
 docker compose logs -f
 
-# Nach Änderungen an requirements.txt oder Dockerfile neu bauen
+# Nach Änderungen an requirements.txt, Dockerfile oder prompts/ neu bauen
 docker compose down && docker compose up --build -d
 ```
+
+Die Python-Abhängigkeiten sind in `requirements.txt` auf feste Versionen gepinnt. Nach einem Upgrade von Pillow oder PyMuPDF sollte der Upload-Pfad geprüft werden (Text-PDF, gescanntes PDF, JPG).
 
 ---
 

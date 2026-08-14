@@ -7,7 +7,7 @@ import threading
 import requests
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response, session
-import fitz  # PyMuPDF
+import pymupdf as fitz
 import pytesseract
 from PIL import Image
 from docx import Document
