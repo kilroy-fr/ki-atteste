@@ -83,9 +83,11 @@ Beide werden beim Import von `app.py` **einmalig** gelesen, nicht pro Request.
 - Formate: PDF (PyMuPDF, mit OCR-Fallback), DOCX (python-docx), TXT, JPG/JPEG (pytesseract)
 - Dateien werden **ausschließlich im Arbeitsspeicher** verarbeitet – nichts wird auf die Disk geschrieben
 
-**PDF-Extraktion** (`_extract_pdf_text`): Zuerst wird der eingebettete Text gelesen. Liegt er unter 100 Zeichen insgesamt, gilt das PDF als bildbasiert und jede Seite wird über ein Pixmap (Faktor 2) an Tesseract (`lang="deu"`) gegeben. Anschließend greift die **Deckblatt-Erkennung**: Bei mehrseitigen Dokumenten wird Seite 1 verworfen, wenn sie nach Fax-/Scan-Deckblatt oder E-Mail-Header aussieht.
+**PDF-Extraktion** (`_extract_pdf_text`): Die Entscheidung fällt **pro Seite**: Hat eine Seite weniger als `_MIN_PAGE_CHARS` (200) Zeichen eingebetteten Text, wird sie über ein Pixmap (Faktor 2) an Tesseract (`lang="deu"`) gegeben. So werden auch gemischte PDFs (digitales Deckblatt + Scans) vollständig erkannt. Anschließend greift die **Deckblatt-Erkennung**: Bei mehrseitigen Dokumenten wird Seite 1 verworfen, wenn sie kurz ist (< `_COVER_MAX_CHARS`) und ein Fax-/Scan-Stichwort enthält, oder wenn mindestens drei E-Mail-Header (`Von:`, `An:`, `Betreff:`, `Gesendet:`) am Zeilenanfang stehen. Die Längengrenze ist nötig, weil fast jeder Briefkopf „Fax:" enthält.
 
-**OCR läuft asynchron:** `POST /api/ocr` nimmt die Datei an, startet einen Thread und liefert sofort eine `job_id`. Das Frontend pollt `GET /api/ocr/<job_id>` bis `status == "done"` und schickt den Text danach als `pre_extracted_texts` an `/chat`. Jobs liegen im Prozessspeicher (`_ocr_jobs`, TTL 30 Minuten) – sie überleben keinen Reload und funktionieren nur mit einem einzelnen Worker.
+**OCR läuft asynchron:** `POST /api/ocr` nimmt die Datei an, startet einen Thread und liefert sofort eine `job_id`. Das Frontend pollt `GET /api/ocr/<job_id>` bis `status == "done"` und schickt den Text danach als `pre_extracted_texts` an `/chat`. Beim Senden wartet das Frontend auf noch laufende OCR-Jobs. Jobs liegen im Prozessspeicher (`_ocr_jobs`, TTL 30 Minuten) – sie überleben keinen Reload und funktionieren nur mit einem einzelnen Worker.
+
+**Dokumente in Folgefragen:** `/chat` sendet als erstes SSE-Event `{"user_content": …}` mit der vollständigen User-Nachricht inkl. Dateitext. Das Frontend legt sie in die Historie, damit Folgefragen die Dokumente noch sehen. Im localStorage wird nur der getippte Text gespeichert (Datenschutz + Speicherlimit). Ein neu geladener alter Chat kennt die Dokumente daher nicht mehr.
 
 Überschreitet der kombinierte Dateitext `MAX_FILE_CHARS`, wird er hart abgeschnitten und ein Hinweis an den Prompt gehängt.
 

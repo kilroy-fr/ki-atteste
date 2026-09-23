@@ -11,9 +11,11 @@ const attachedFilesEl = document.getElementById('attachedFiles');
 const modelSelect  = document.getElementById('modelSelect');
 const micBtn       = document.getElementById('micBtn');
 
-// Conversation history: [{role: 'user'|'assistant', content: '...'}]
+// Conversation history: [{role: 'user'|'assistant', content: '...', display?: '...', files?: ['name']}]
+// Bei User-Turns ist content die vollständige Nachricht inkl. Dateitext (fürs Modell),
+// display der getippte Text (für die Anzeige). Gespeichert wird nur display – siehe saveCurrentChat.
 let conversationHistory = [];
-// Datei-Einträge: [{file: File, ocrJobId: string|null, ocrStatus: 'none'|'pending'|'done'|'error', ocrText: string|null, pollInterval: number|null}]
+// Datei-Einträge: [{file: File, ocrJobId: string|null, ocrStatus: 'none'|'pending'|'done'|'error', ocrText: string|null, pollInterval: number|null, ocrDone: Promise|null}]
 let attachedFiles = [];
 let isStreaming = false;
 let currentAbortController = null;
@@ -92,12 +94,19 @@ function saveCurrentChat(title) {
   const chats = getChats();
   const idx = chats.findIndex(c => c.id === currentChatId);
   const now = Date.now();
+  // Dateitexte nicht in den localStorage: Patientendokumente bleiben nur im laufenden Tab,
+  // und 80k Zeichen pro Chat würden das Speicherlimit schnell sprengen
+  const history = conversationHistory.map(turn =>
+    turn.role === 'user' && turn.display !== undefined
+      ? { role: 'user', content: turn.display || '[Dateien hochgeladen]', display: turn.display, files: turn.files }
+      : turn
+  );
   if (idx >= 0) {
-    chats[idx].history = [...conversationHistory];
+    chats[idx].history = history;
     chats[idx].updated = now;
     if (title) chats[idx].title = title;
   } else {
-    chats.unshift({ id: currentChatId, title: title || 'Chat', titlePending: true, created: now, updated: now, history: [...conversationHistory], mode: currentMode });
+    chats.unshift({ id: currentChatId, title: title || 'Chat', titlePending: true, created: now, updated: now, history, mode: currentMode });
     if (chats.length > 50) chats.length = 50;
   }
   chats.sort((a, b) => b.updated - a.updated);
@@ -133,7 +142,7 @@ function loadChat(id) {
   if (chatWelcome) chatWelcome.style.display = 'none';
   for (const turn of conversationHistory) {
     if (turn.role === 'user') {
-      appendUserMessage(turn.content, []);
+      appendUserMessage(turn.display !== undefined ? turn.display : turn.content, turn.files || []);
     } else if (turn.role === 'assistant') {
       const bubble = appendAssistantMessage('', false);
       updateAssistantMessage(bubble, turn.content, false);
@@ -273,9 +282,19 @@ modelSelect.addEventListener('change', async () => {
 function addFile(file) {
   if (attachedFiles.find(x => x.file.name === file.name)) return;
   const needsOcr = /\.(jpg|jpeg|pdf)$/i.test(file.name);
-  const entry = { file, ocrJobId: null, ocrStatus: needsOcr ? 'pending' : 'none', ocrText: null, pollInterval: null };
+  const entry = { file, ocrJobId: null, ocrStatus: needsOcr ? 'pending' : 'none', ocrText: null, pollInterval: null, ocrDone: null };
+  if (needsOcr) entry.ocrDone = new Promise(resolve => { entry.resolveOcr = resolve; });
   attachedFiles.push(entry);
   if (needsOcr) startOcr(entry);
+}
+
+function finishOcr(entry, status, text) {
+  if (entry.pollInterval) clearInterval(entry.pollInterval);
+  entry.pollInterval = null;
+  entry.ocrStatus = status;
+  entry.ocrText = text;
+  entry.resolveOcr();
+  renderAttachedFiles();
 }
 
 fileInput.addEventListener('change', () => {
@@ -294,14 +313,10 @@ async function startOcr(entry) {
       entry.ocrJobId = data.job_id;
       entry.pollInterval = setInterval(() => pollOcr(entry), 1500);
     } else {
-      entry.ocrStatus = 'error';
-      entry.ocrText = '[OCR-Fehler]';
-      renderAttachedFiles();
+      finishOcr(entry, 'error', '[OCR-Fehler]');
     }
   } catch (e) {
-    entry.ocrStatus = 'error';
-    entry.ocrText = '[OCR-Fehler]';
-    renderAttachedFiles();
+    finishOcr(entry, 'error', '[OCR-Fehler]');
   }
 }
 
@@ -310,19 +325,24 @@ async function pollOcr(entry) {
     const res = await fetch(`/api/ocr/${entry.ocrJobId}`);
     const data = await res.json();
     if (data.status === 'done') {
-      clearInterval(entry.pollInterval);
-      entry.pollInterval = null;
-      entry.ocrStatus = 'done';
-      entry.ocrText = data.text;
-      renderAttachedFiles();
+      finishOcr(entry, 'done', data.text);
     } else if (data.status === 'error') {
-      clearInterval(entry.pollInterval);
-      entry.pollInterval = null;
-      entry.ocrStatus = 'error';
-      entry.ocrText = data.text || '[OCR-Fehler]';
-      renderAttachedFiles();
+      finishOcr(entry, 'error', data.text || '[OCR-Fehler]');
+    } else if (data.status === 'not_found') {
+      // Job weg, z. B. nach Server-Reload – sonst würde endlos gepollt
+      finishOcr(entry, 'error', '[OCR-Fehler: Job nicht mehr vorhanden, bitte Datei erneut hochladen]');
     }
   } catch (_) {}
+}
+
+// Wartet auf laufende Texterkennung; bricht ab, wenn der Nutzer auf Stopp drückt
+function waitForOcr(entries, signal) {
+  const pending = entries.filter(e => e.ocrStatus === 'pending').map(e => e.ocrDone);
+  if (pending.length === 0) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(new DOMException('Abgebrochen', 'AbortError')), {once: true});
+    Promise.all(pending).then(resolve);
+  });
 }
 
 function renderAttachedFiles() {
@@ -425,44 +445,44 @@ async function sendMessage() {
   const isNewChat = currentChatId === null;
   if (isNewChat) currentChatId = newUUID();
   const newTitle = isNewChat ? chatTitle(text, files) : null;
-
-  // Polling stoppen (Jobs laufen server-seitig weiter, aber wir brauchen sie nicht mehr)
-  files.forEach(entry => {
-    if (entry.pollInterval) clearInterval(entry.pollInterval);
-  });
+  const fileNames = files.map(entry => entry.file.name);
 
   userInput.value = '';
   userInput.style.height = 'auto';
   attachedFiles = [];
   renderAttachedFiles();
 
-  appendUserMessage(text, files);
-  conversationHistory.push({role: 'user', content: text || '[Dateien hochgeladen]'});
+  appendUserMessage(text, fileNames);
+  const userTurn = {role: 'user', content: text || '[Dateien hochgeladen]', display: text, files: fileNames};
+  conversationHistory.push(userTurn);
 
   const assistantBubble = appendAssistantMessage('', true);
   setSending(true);
-
-  const formData = new FormData();
-  formData.append('message', text);
-  formData.append('history', JSON.stringify(conversationHistory.slice(0, -1)));
-  formData.append('model', modelSelect.value);
-  formData.append('mode', currentMode);
-
-  // Vorextrahierte OCR-Texte separat schicken; Dateien ohne OCR direkt anhängen
-  const preExtracted = {};
-  files.forEach(entry => {
-    if (entry.ocrText !== null) {
-      preExtracted[entry.file.name] = entry.ocrText;
-    } else {
-      formData.append('files', entry.file);
-    }
-  });
-  formData.append('pre_extracted_texts', JSON.stringify(preExtracted));
+  currentAbortController = new AbortController();
 
   let fullResponse = '';
 
   try {
-    currentAbortController = new AbortController();
+    // Laufende OCR abwarten – sonst gehen JPGs ohne Text raus und PDFs werden doppelt erkannt
+    await waitForOcr(files, currentAbortController.signal);
+
+    const formData = new FormData();
+    formData.append('message', text);
+    formData.append('history', JSON.stringify(conversationHistory.slice(0, -1)));
+    formData.append('model', modelSelect.value);
+    formData.append('mode', currentMode);
+
+    // Vorextrahierte OCR-Texte separat schicken; Dateien ohne OCR direkt anhängen
+    const preExtracted = {};
+    files.forEach(entry => {
+      if (entry.ocrText !== null) {
+        preExtracted[entry.file.name] = entry.ocrText;
+      } else {
+        formData.append('files', entry.file);
+      }
+    });
+    formData.append('pre_extracted_texts', JSON.stringify(preExtracted));
+
     const response = await fetch('/chat', {method: 'POST', body: formData, signal: currentAbortController.signal});
 
     if (!response.ok) {
@@ -488,6 +508,10 @@ async function sendMessage() {
         if (!raw) continue;
         try {
           const chunk = JSON.parse(raw);
+          if (chunk.user_content !== undefined) {
+            userTurn.content = chunk.user_content;
+            continue;
+          }
           if (chunk.error) {
             updateAssistantMessage(assistantBubble, `⚠️ Fehler: ${chunk.error}`, false);
             break;
@@ -536,7 +560,7 @@ async function sendMessage() {
 }
 
 // ---- UI Hilfsfunktionen ----
-function appendUserMessage(text, files) {
+function appendUserMessage(text, fileNames) {
   const group = document.createElement('div');
   group.className = 'message-group';
 
@@ -554,13 +578,13 @@ function appendUserMessage(text, files) {
     bubble.appendChild(content);
   }
 
-  if (files.length > 0) {
+  if (fileNames.length > 0) {
     const filesDiv = document.createElement('div');
     filesDiv.className = 'message-files';
-    files.forEach(entry => {
+    fileNames.forEach(name => {
       const chip = document.createElement('span');
       chip.className = 'message-file-chip';
-      chip.textContent = '📎 ' + entry.file.name;
+      chip.textContent = '📎 ' + name;
       filesDiv.appendChild(chip);
     });
     bubble.appendChild(filesDiv);
@@ -602,7 +626,7 @@ function appendAssistantMessage(text, isLoading) {
   copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="15" height="15"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>';
   copyBtn.onclick = () => {
     const rawText = bubble.dataset.rawText || text;
-    navigator.clipboard.writeText(rawText).then(() => {
+    copyFormatted(rawText, content.innerHTML).then(() => {
       copyBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" width="15" height="15"><polyline points="20 6 9 17 4 12"/></svg>';
       copyBtn.classList.add('copied');
       setTimeout(() => {
@@ -631,6 +655,25 @@ function updateAssistantMessage(bubble, text, streaming) {
     content.innerHTML = renderMarkdown(text);
   }
   scrollToBottom();
+}
+
+// Markdown-Zeichen entfernen, damit in der Praxissoftware kein "##" oder "**" landet
+function markdownToPlain(md) {
+  return md
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/__(.+?)__/g, '$1')
+    .replace(/`([^`]+)`/g, '$1');
+}
+
+// Klartext für Praxissoftware, HTML für Word & Co. – das Zielprogramm nimmt sich, was es kann
+function copyFormatted(markdown, html) {
+  const plain = markdownToPlain(markdown);
+  if (typeof ClipboardItem === 'undefined') return navigator.clipboard.writeText(plain);
+  return navigator.clipboard.write([new ClipboardItem({
+    'text/plain': new Blob([plain], {type: 'text/plain'}),
+    'text/html': new Blob([html], {type: 'text/html'}),
+  })]).catch(() => navigator.clipboard.writeText(plain));
 }
 
 function scrollToBottom() {

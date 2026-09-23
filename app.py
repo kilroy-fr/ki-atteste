@@ -1,10 +1,12 @@
 import io
 import os
 import json
+import re
 import time
 import uuid
 import threading
 import requests
+from datetime import date
 from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response, session
 import pymupdf as fitz
@@ -59,19 +61,34 @@ SYSTEM_PROMPT = _PROMPT_FILE.read_text(encoding="utf-8").strip()
 _PROMPT_NEUTRAL_FILE = Path(__file__).parent / "prompts" / "system_prompt_neutral.md"
 SYSTEM_PROMPT_NEUTRAL = _PROMPT_NEUTRAL_FILE.read_text(encoding="utf-8").strip()
 
-# ---- Deckblatt-Erkennung (wie im ocr-service) ----
+# ---- Deckblatt-Erkennung (angelehnt an den ocr-service) ----
 _COVER_KEYWORDS = [
     "fax", "deckblatt", "faxnummer", "telefax", "fax-deckblatt", "faxseiten", "faxgerät",
     "scandatei", "iq4docs", "notificationservice", "followme.print",
     "automatisch generiert", "automatisch von", "scandatei von",
 ]
-_EMAIL_HEADERS = ["von:", "an:", "betreff:", "gesendet:"]
+# Deckblätter sind kurz. Ohne diese Grenze fliegt jede erste Briefseite raus,
+# weil fast jeder Briefkopf "Fax:" enthält.
+_COVER_MAX_CHARS = 1000
+_EMAIL_HEADER_RE = re.compile(r"^\s*(von|an|betreff|gesendet)\s*:", re.IGNORECASE | re.MULTILINE)
+
+# Seiten mit weniger eingebettetem Text gelten als gescannt (ein aufgedruckter
+# Fax-Kopf allein soll die OCR nicht verhindern)
+_MIN_PAGE_CHARS = 200
+
 
 def _is_cover_page(text: str) -> bool:
     lower = text.lower()
-    if any(kw in lower for kw in _COVER_KEYWORDS):
+    if len(lower.strip()) < _COVER_MAX_CHARS and any(kw in lower for kw in _COVER_KEYWORDS):
         return True
-    return sum(1 for h in _EMAIL_HEADERS if h in lower) >= 3
+    headers = {h.lower() for h in _EMAIL_HEADER_RE.findall(text)}
+    return len(headers) >= 3
+
+
+def _ocr_page(page) -> str:
+    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
+    img = Image.open(io.BytesIO(pix.tobytes("png")))
+    return pytesseract.image_to_string(img, lang="deu").strip()
 
 
 def _extract_pdf_text(data: bytes) -> str:
@@ -80,15 +97,15 @@ def _extract_pdf_text(data: bytes) -> str:
     if num_pages == 0:
         doc.close()
         return ""
-    total_chars = sum(len((p.get_text() or "").strip()) for p in doc)
-    if total_chars >= 100:
-        page_texts = [(p.get_text() or "").strip() for p in doc]
-    else:
-        page_texts = []
-        for p in doc:
-            pix = p.get_pixmap(matrix=fitz.Matrix(2, 2))
-            img = Image.open(io.BytesIO(pix.tobytes("png")))
-            page_texts.append(pytesseract.image_to_string(img, lang="deu"))
+    # Pro Seite entscheiden – gemischte PDFs (digitales Deckblatt + Scans) sonst ohne OCR
+    page_texts = []
+    for p in doc:
+        text = (p.get_text() or "").strip()
+        if len(text) < _MIN_PAGE_CHARS:
+            ocr_text = _ocr_page(p)
+            if len(ocr_text) > len(text):
+                text = ocr_text
+        page_texts.append(text)
     doc.close()
     start = 1 if num_pages > 1 and _is_cover_page(page_texts[0]) else 0
     return "\n\n".join(page_texts[start:]).strip()
@@ -277,6 +294,9 @@ def extract_text_from_file(file_storage):
     try:
         if filename.endswith(".pdf"):
             return _extract_pdf_text(file_storage.read())
+        elif filename.endswith((".jpg", ".jpeg")):
+            img = Image.open(io.BytesIO(file_storage.read()))
+            return pytesseract.image_to_string(img, lang="deu").strip()
         elif filename.endswith(".docx"):
             data = file_storage.read()
             doc = Document(io.BytesIO(data))
@@ -309,14 +329,15 @@ def chat():
     file_texts = []
 
     # Vorextrahierte Texte zuerst einbauen
+    # Leere Ergebnisse trotzdem aufführen, damit das Modell weiß, dass die Datei da war
     for fname, text in pre_extracted.items():
-        if text:
-            file_texts.append(f"--- Datei: {fname} ---\n{text}")
+        text = (text or "").strip() or "[Kein Text erkannt]"
+        file_texts.append(f"--- Datei: {fname} ---\n{text}")
 
     # Direkt übermittelte Dateien (DOCX, TXT, Fallback)
     for f in request.files.getlist("files"):
         if f and f.filename:
-            text = extract_text_from_file(f)
+            text = extract_text_from_file(f).strip() or "[Kein Text erkannt]"
             file_texts.append(f"--- Datei: {f.filename} ---\n{text}")
 
     if file_texts:
@@ -333,7 +354,6 @@ def chat():
             combined_files
             + truncation_note
             + "\n\n---\nAufgabe: " + user_message
-            + "\n\n[Antworte AUSSCHLIESSLICH auf Deutsch und verzichte auf Disclaimer.]"
         )
     else:
         full_content = user_message
@@ -343,6 +363,8 @@ def chat():
 
     mode = request.form.get("mode", "medical")
     active_prompt = SYSTEM_PROMPT_NEUTRAL if mode == "neutral" else SYSTEM_PROMPT
+    # Das Modell hat keine Uhr – ohne diese Zeile erfindet es Datumsangaben
+    active_prompt += f"\n\nHeutiges Datum: {date.today():%d.%m.%Y}"
     messages = [{"role": "system", "content": active_prompt}]
     for turn in history:
         role = turn.get("role", "user")
@@ -352,6 +374,9 @@ def chat():
     messages.append({"role": "user", "content": full_content})
 
     def generate():
+        # Vollständige User-Nachricht inkl. Dateitext zurückgeben – der Client legt sie
+        # in die Historie, damit Folgefragen die Dokumente noch sehen
+        yield f"data: {json.dumps({'user_content': full_content})}\n\n"
         try:
             resp = requests.post(
                 f"{OLLAMA_BASE_URL}/api/chat",
