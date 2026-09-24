@@ -1,0 +1,10 @@
+# Patientendaten niemals ins Image kopieren
+testdateien/
+uploads/
+.env
+.git/
+.claude/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/

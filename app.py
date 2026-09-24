@@ -11,7 +11,7 @@ from pathlib import Path
 from flask import Flask, render_template, request, jsonify, Response, session
 import pymupdf as fitz
 import pytesseract
-from PIL import Image
+from PIL import Image, ImageFilter
 from docx import Document
 
 app = Flask(__name__)
@@ -26,30 +26,32 @@ WHISPER_HOST = os.environ.get("WHISPER_HOST", "diktat-whisper")
 WHISPER_PORT = os.environ.get("WHISPER_PORT", "8000")
 
 
+# Ausgewählt mit echten Arztbriefen (Befund wiedergeben, Reha-Attest, Widerspruch).
+# Aussortiert, weil sie auch mit angepasstem Prompt Fakten erfanden: qwen3 (8b/14b),
+# qwen2.5:14b, deepseek-r1:14b, phi4, mistral-nemo, gemma4:e4b, gpt-oss:20b.
+# Typische Fehler: Abkürzungen wie pDMS frei "aufgelöst", Medikamente erfunden,
+# als Absender des Fremdbefunds unterschrieben, Reha-Attest für Bagatellbefunde.
 ALLOWED_MODELS = {
-    "qwen2.5:14b",
-    "qwen3:14b",
-    "qwen3:8b",
-    "deepseek-r1:14b",
     "gemma4:12b",
     "gemma4:26b",
-    "gemma4:e4b",
-    "phi4:latest",
-    "mistral-nemo:latest",
-    "gpt-oss:20b",
 }
 
 MODEL_DESCRIPTIONS: dict[str, str] = {
-    "qwen2.5:14b":         "Bewährt, stabil – Vorgängergeneration",
-    "qwen3:14b":           "Empfohlen – aktuell, gutes Deutsch (Thinking)",
-    "qwen3:8b":            "Schneller, leicht geringere Qualität",
-    "deepseek-r1:14b":     "Sehr präzise, aber langsam (Reasoning)",
-    "gemma4:12b":          "Ausgewogen – gutes Deutsch, moderate Ressourcen",
-    "gemma4:26b":          "Sehr stark, aber ressourcenintensiv",
-    "gemma4:e4b":          "Kompakt & effizient (Gemma 4)",
-    "phi4:latest":         "Präzise Struktur, kompakter Speicherbedarf",
-    "mistral-nemo:latest": "Schnell, gut für einfache Texte",
-    "gpt-oss:20b":         "Experimentell – GPT-ähnlich",
+    "gemma4:12b": "Empfohlen – schnell (5–15 s), zuverlässig",
+    "gemma4:26b": "Gründlich – denkt vorher nach (meist 20–60 s)",
+}
+
+# Sampling und Thinking pro Modell. Mit Thinking braucht gemma4 temperature 1.0 –
+# bei 0.4 liefen Denkphasen in Schleifen (bis 220 s, dann leere Antwort).
+# num_predict begrenzt eine ausufernde Denkphase auf ~2 Minuten.
+MODEL_OPTIONS: dict[str, dict] = {
+    "gemma4:12b": {"temperature": 0.4},
+    "gemma4:26b": {"temperature": 1.0, "num_predict": 8192},
+}
+
+MODEL_THINK: dict[str, bool] = {
+    "gemma4:12b": False,
+    "gemma4:26b": True,
 }
 
 DEFAULT_MODEL = "gemma4:12b"
@@ -85,9 +87,16 @@ def _is_cover_page(text: str) -> bool:
     return len(headers) >= 3
 
 
+# Tesseract ist auf ~300 dpi trainiert; bei 144 dpi (Faktor 2) fehlten auf blassen
+# Kopien ganze Wörter. Der Median-Filter schließt Lücken in ausgeblichenen Buchstaben,
+# sonst schneidet Tesseract Zeilenanfänge ab ("enlefaxin" statt "Venlafaxin").
+_OCR_DPI = 300
+
+
 def _ocr_page(page) -> str:
-    pix = page.get_pixmap(matrix=fitz.Matrix(2, 2))
-    img = Image.open(io.BytesIO(pix.tobytes("png")))
+    zoom = _OCR_DPI / 72
+    pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom), colorspace=fitz.csGRAY)
+    img = Image.open(io.BytesIO(pix.tobytes("png"))).filter(ImageFilter.MedianFilter(3))
     return pytesseract.image_to_string(img, lang="deu").strip()
 
 
@@ -289,6 +298,20 @@ def api_ocr_status(job_id):
     return jsonify(job)
 
 
+# Kontext nur so groß wie nötig: Ein fester 32k-Kontext schob 14B-Modelle teilweise
+# auf die CPU (halbe Geschwindigkeit). Gemessen ~2,5 Zeichen/Token bei deutschem
+# Fachtext; die Reserve deckt Thinking und Antwort. 8k-Schritte, damit Ollama das
+# Modell nicht bei jeder Anfrage mit neuer Kontextgröße neu lädt.
+_CTX_RESERVE = 8192
+_CTX_STEP = 8192
+
+
+def _num_ctx(messages: list) -> int:
+    chars = sum(len(m["content"]) for m in messages)
+    need = chars * 2 // 5 + _CTX_RESERVE
+    return min(-(-need // _CTX_STEP) * _CTX_STEP, OLLAMA_NUM_CTX)
+
+
 def extract_text_from_file(file_storage):
     filename = file_storage.filename.lower()
     try:
@@ -373,31 +396,49 @@ def chat():
             messages.append({"role": role, "content": content})
     messages.append({"role": "user", "content": full_content})
 
+    body = {"model": model, "messages": messages, "stream": True,
+            "options": {**MODEL_OPTIONS.get(model, {}), "num_ctx": _num_ctx(messages)}}
+    if model in MODEL_THINK:
+        body["think"] = MODEL_THINK[model]
+
     def generate():
         # Vollständige User-Nachricht inkl. Dateitext zurückgeben – der Client legt sie
         # in die Historie, damit Folgefragen die Dokumente noch sehen
         yield f"data: {json.dumps({'user_content': full_content})}\n\n"
         try:
-            resp = requests.post(
-                f"{OLLAMA_BASE_URL}/api/chat",
-                json={"model": model, "messages": messages, "stream": True, "options": {"num_ctx": OLLAMA_NUM_CTX}},
-                stream=True,
-                timeout=300,
-            )
+            resp = requests.post(f"{OLLAMA_BASE_URL}/api/chat", json=body, stream=True, timeout=300)
             resp.raise_for_status()
+            thinking_sent = False
+            content_sent = False
             for line in resp.iter_lines():
                 if not line:
                     continue
                 try:
                     chunk = json.loads(line)
-                    token = chunk.get("message", {}).get("content", "")
+                    if chunk.get("error"):
+                        yield f"data: {json.dumps({'error': chunk['error']})}\n\n"
+                        return
+                    msg = chunk.get("message", {})
+                    # Thinking-Text wird nicht angezeigt, nur ein Hinweis, dass das Modell arbeitet
+                    if msg.get("thinking") and not thinking_sent:
+                        thinking_sent = True
+                        yield f"data: {json.dumps({'thinking': True})}\n\n"
+                    token = msg.get("content", "")
                     if token:
+                        content_sent = True
                         yield f"data: {json.dumps({'token': token})}\n\n"
                     if chunk.get("done"):
+                        if not content_sent:
+                            # Denkphase hat num_predict aufgebraucht, ohne eine Antwort zu schreiben
+                            err = "Das Modell hat keine Antwort erzeugt. Bitte erneut senden oder gemma4:12b wählen."
+                            yield f"data: {json.dumps({'error': err})}\n\n"
+                            return
                         yield f"data: {json.dumps({'done': True})}\n\n"
                         return
                 except (ValueError, KeyError):
                     continue
+            # Stream ohne done-Chunk beendet (z. B. Ollama-Abbruch)
+            yield f"data: {json.dumps({'error': 'Antwort des Modells unvollständig abgebrochen'})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 

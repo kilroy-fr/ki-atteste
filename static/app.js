@@ -516,6 +516,13 @@ async function sendMessage() {
             updateAssistantMessage(assistantBubble, `⚠️ Fehler: ${chunk.error}`, false);
             break;
           }
+          if (chunk.thinking && !started) {
+            const content = assistantBubble.querySelector('.message-content');
+            if (content && !content.querySelector('.thinking-label')) {
+              content.insertAdjacentHTML('beforeend', '<span class="thinking-label">denkt nach …</span>');
+            }
+            continue;
+          }
           if (chunk.token) {
             if (!started) {
               started = true;

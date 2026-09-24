@@ -790,6 +790,13 @@ body {
   animation: typing-bounce 1.2s infinite;
 }
 
+.thinking-label {
+  margin-left: 10px;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
 .typing-dots span:nth-child(2) { animation-delay: 0.2s; }
 .typing-dots span:nth-child(3) { animation-delay: 0.4s; }
 

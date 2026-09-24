@@ -67,7 +67,7 @@ Alle Einstellungen werden über `.env` gesetzt:
 |------------------|-------------------------------------|-------------------------------------------------------|
 | `SECRET_KEY`     | `change-me-in-production`           | Flask Session Secret (unbedingt ändern!)              |
 | `OLLAMA_URL`     | `http://host.docker.internal:11434` | Ollama API-Endpunkt                                   |
-| `OLLAMA_NUM_CTX` | `32768`                             | Kontextfenster pro Anfrage – höher = mehr RAM/VRAM    |
+| `OLLAMA_NUM_CTX` | `32768`                             | Obergrenze des Kontextfensters (wird je Anfrage nach Textlänge gewählt) |
 | `MAX_FILE_CHARS` | `80000`                             | Obergrenze für hochgeladenen Dokumenttext je Anfrage  |
 | `WHISPER_HOST`   | `diktat-whisper`                    | Hostname des Whisper-Services                         |
 | `WHISPER_PORT`   | `8000`                              | Port des Whisper-Services                             |
@@ -81,20 +81,12 @@ Alle Einstellungen werden über `.env` gesetzt:
 
 Im Dropdown erscheinen nur Modelle, die in der Whitelist stehen **und** in Ollama installiert sind:
 
-| Modell                | Charakteristik                                   |
-|-----------------------|--------------------------------------------------|
-| `gemma4:12b`          | Standard – ausgewogen, gutes Deutsch             |
-| `gemma4:26b`          | Sehr stark, aber ressourcenintensiv              |
-| `gemma4:e4b`          | Kompakt & effizient                              |
-| `qwen3:14b`           | Empfohlen – aktuell, gutes Deutsch (Thinking)    |
-| `qwen3:8b`            | Schneller, leicht geringere Qualität             |
-| `qwen2.5:14b`         | Bewährt, stabil – Vorgängergeneration            |
-| `deepseek-r1:14b`     | Sehr präzise, aber langsam (Reasoning)           |
-| `phi4:latest`         | Präzise Struktur, kompakter Speicherbedarf       |
-| `mistral-nemo:latest` | Schnell, gut für einfache Texte                  |
-| `gpt-oss:20b`         | Experimentell – GPT-ähnlich                      |
+| Modell       | Charakteristik                                        |
+|--------------|-------------------------------------------------------|
+| `gemma4:12b` | Standard – schnell (5–15 s), ohne Thinking            |
+| `gemma4:26b` | Gründlich – denkt vorher nach (meist 20–60 s)         |
 
-Weitere Modelle lassen sich in `ALLOWED_MODELS` und `MODEL_DESCRIPTIONS` in `app.py` ergänzen.
+Die Liste ist bewusst kurz: In Tests mit echten Arztbriefen haben qwen3, qwen2.5, deepseek-r1, phi4, mistral-nemo, gemma4:e4b und gpt-oss auch mit angepasstem Prompt Befunde, Medikamente oder Funktionseinschränkungen erfunden. Neue Modelle vor der Aufnahme in `ALLOWED_MODELS` mit echten Befunden testen und in `MODEL_DESCRIPTIONS`, `MODEL_OPTIONS` und `MODEL_THINK` eintragen.
 
 ---
 
