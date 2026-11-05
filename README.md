@@ -13,9 +13,10 @@ KI-gestützter Assistent für medizinische Fachkräfte zum Erstellen von Atteste
 - **Dokument-Upload:** PDF (inkl. OCR für gescannte Dokumente), DOCX, TXT und JPG – per Auswahl oder Drag & Drop, vollständig im Arbeitsspeicher, keine Dateien auf der Disk
 - **Deckblatt-Erkennung:** Fax- und Scan-Deckblätter sowie E-Mail-Header werden automatisch übersprungen
 - **Spracheingabe:** Diktat wird über einen lokalen Whisper-Service transkribiert
+- **Automatische Websuche:** Braucht eine Frage aktuelles Wissen (Leitlinien, Lieferengpässe, Rote-Hand-Briefe, Fristen …), sucht die App selbstständig über einen mitgelieferten SearXNG-Container – ohne `/search`-Befehl. Suchbegriffe enthalten nur allgemeine Fachbegriffe; ein Filter verwirft alles mit Namen, Daten, Adressen oder Nummern aus den Dokumenten. Unter der Antwort stehen die gesuchten Begriffe und die Quellen. Eingefügte Links werden abgerufen.
 - **Chat-Historie im Browser** mit automatisch generierten Titeln (localStorage, max. 50 Chats)
 - Modellauswahl zur Laufzeit aus einer kuratierten Liste, mit Kurzbeschreibung je Modell
-- Vollständig lokal – keine Cloud-Anbindung
+- Lokale KI – keine Cloud-KI. Nach außen gehen nur Suchbegriffe und Seitenabrufe der Websuche, nie Dokumenttext
 
 ---
 
@@ -35,6 +36,7 @@ KI-gestützter Assistent für medizinische Fachkräfte zum Erstellen von Atteste
   docker network create diktat-network
   ```
 - Der Whisper-Service `diktat-whisper` am `diktat-network` (nur für die Spracheingabe nötig; ohne ihn funktioniert der Rest normal)
+- `SEARXNG_SECRET` in `.env` (für den SearXNG-Container der Websuche): `openssl rand -hex 32`
 
 ---
 
@@ -47,7 +49,7 @@ cd ki-atteste
 
 # 2. Umgebungsvariablen anpassen
 cp .env.example .env
-# SECRET_KEY in .env auf einen sicheren Wert setzen!
+# SECRET_KEY und SEARXNG_SECRET in .env auf sichere Werte setzen!
 
 # 3. Container starten
 docker compose up --build -d
@@ -72,6 +74,9 @@ Alle Einstellungen werden über `.env` gesetzt:
 | `WHISPER_HOST`   | `diktat-whisper`                    | Hostname des Whisper-Services                         |
 | `WHISPER_PORT`   | `8000`                              | Port des Whisper-Services                             |
 | `TITLE_MODEL`    | `llama3.2:3b`                       | Modell für die automatische Chat-Titelvergabe         |
+| `SEARXNG_URL`    | `http://searxng:8080`               | SearXNG für die Websuche; leer = Websuche aus         |
+| `SEARXNG_SECRET` | –                                   | Secret des SearXNG-Containers (Pflicht)               |
+| `ROUTER_MODEL`   | leer                                | Modell für die Entscheidung „Websuche ja/nein“; leer = gewähltes Chat-Modell (kein zusätzlicher VRAM) |
 | `TZ`             | `Europe/Berlin`                     | Zeitzone im Container                                 |
 | `DOCKER_NETWORK` | `caddy-proxy-network`               | Externes Docker-Netzwerk für Caddy                    |
 
@@ -97,7 +102,9 @@ Browser  ── localStorage: Chat-Historie
   │  SSE-Stream (text/event-stream)
   ▼
 Flask (app.py, Port 5000)
-  ├─ POST /api/chat  ──────▶  Ollama (Host, Port 11434)
+  ├─ POST /chat  ──────────▶  Ollama (Port 11434)
+  │     └─ bei Bedarf ─────▶  SearXNG (Container, internes Netz) ──▶ Suchmaschinen
+  │                           + Abruf der Trefferseiten
   ├─ POST /api/ocr   ──────▶  PyMuPDF + Tesseract (im Container, asynchron)
   └─ POST /api/transcribe ─▶  diktat-whisper (Port 8000)
 ```

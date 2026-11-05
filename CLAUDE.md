@@ -9,6 +9,7 @@ Flask-basierte Chat-App, die über Ollama (lokal) medizinische Atteste, Gutachte
 - **Docker-Netzwerke:** `caddy-proxy-network` (Caddy) und `diktat-network` (Whisper) – beide extern, müssen vor dem Start existieren
 - **Ollama-Endpunkt:** `http://host.docker.internal:11434` (läuft auf dem Host)
 - **Whisper:** externer Service `diktat-whisper:8000` (OpenAI-kompatible API), nicht Teil dieses Stacks
+- **SearXNG:** Container `ki-atteste-searxng` im selben Stack, nur im internen Netz `ki-atteste-search` (kein Port nach außen) – für die Websuche
 
 ## Projektstruktur
 
@@ -21,8 +22,9 @@ static/app.js                   Chat-Logik (SSE, OCR-Polling, Aufnahme, Chat-His
 static/style.css                Styles
 static/favicon.svg              Icon
 static/logo.jpg                 Logo
+searxng/settings.yml            SearXNG-Konfiguration (JSON-Format an, Limiter aus), read-only gemountet
 Dockerfile                      Python 3.12-slim, libmupdf-dev, tesseract-ocr(-deu)
-docker-compose.yml              Single-Service-Stack, zwei externe Netzwerke
+docker-compose.yml              App + SearXNG, zwei externe Netzwerke + internes search-network
 .env / .env.example             Umgebungsvariablen
 VERSION                         Semver-Versionsdatei (wird im Frontend angezeigt)
 requirements.txt                Python-Abhängigkeiten
@@ -58,7 +60,10 @@ docker compose down && docker compose up --build -d
 | `MAX_FILE_CHARS` | `80000`                             | Obergrenze für kombinierten Dateitext je Chat-Request |
 | `WHISPER_HOST`   | `diktat-whisper`                    | Hostname des Whisper-Services                 |
 | `WHISPER_PORT`   | `8000`                              | Port des Whisper-Services                     |
-| `TITLE_MODEL`    | `llama3.2:3b`                       | Kleines Modell für die Chat-Titelgenerierung  |
+| `TITLE_MODEL`    | `llama3.2:3b`                       | Kleines Modell für die Chat-Titelgenerierung (**derzeit nicht installiert** → Titel bleiben beim Fallback) |
+| `SEARXNG_URL`    | `http://searxng:8080`               | SearXNG-Endpunkt; leer = Websuche aus         |
+| `SEARXNG_SECRET` | –                                   | Pflicht für den SearXNG-Container (`openssl rand -hex 32`) |
+| `ROUTER_MODEL`   | leer                                | Modell für „Websuche ja/nein“; leer = gewähltes Chat-Modell |
 | `TZ`             | `Europe/Berlin`                     | Zeitzone                                      |
 | `DOCKER_NETWORK` | `caddy-proxy-network`               | Externes Docker-Netzwerk für Caddy            |
 
@@ -75,7 +80,7 @@ Die Auswahl ist eine **Whitelist** (`ALLOWED_MODELS` in `app.py`), keine Ausschl
 
 **Thinking bei gemma4:** Nur mit temperature 1.0. Bei 0.4 liefen Denkphasen in Schleifen (bis 220 s, danach leere Antwort). Für gemma4:12b bringt Thinking keine bessere Qualität, nur 3–10× mehr Wartezeit. `num_predict` begrenzt ausufernde Denkphasen; kommt dabei keine Antwort zustande, meldet `/chat` einen Fehler statt einer leeren Blase. Während des Denkens sendet `/chat` einmalig `{"thinking": true}`, das Frontend zeigt „denkt nach …“.
 
-**Kontextgröße** (`_num_ctx`): Textlänge × 0,4 (≈ 2,5 Zeichen/Token) + 8192 Reserve, in 8k-Schritten, gedeckelt durch `OLLAMA_NUM_CTX`. Ein fester 32k-Kontext schob 14B-Modelle teilweise auf die CPU (halbe Geschwindigkeit); auf der GPU sind neben Ollama ~4 GB durch andere Dienste belegt.
+**Kontextgröße** (`_ctx_for`): Steht `num_ctx` in `MODEL_OPTIONS`, gilt dieser feste Wert (gemma4:12b: `OLLAMA_NUM_CTX` = 32k). Sonst `_num_ctx`: Textlänge × 0,4 (≈ 2,5 Zeichen/Token) + 8192 Reserve, in 8k-Schritten, gedeckelt durch `OLLAMA_NUM_CTX`. Hintergrund: Ollama lädt ein Modell neu (~2,5 s), sobald sich `num_ctx` ändert. Bei gemma4:12b kostet 32k statt 8k nur 0,43 GB VRAM (nvidia-smi, 11/2026: 9,1 statt 8,7 GB; Sliding-Window-Attention hält den KV-Cache klein) – fester Kontext ist daher günstiger als Neuladen. Die dynamische Größe stammt aus Tests mit 14B-Modellen (qwen), die ein fester 32k-Kontext teilweise auf die CPU schob; sie bleibt für gemma4:26b, das ohnehin nicht ganz in die 16 GB passt. Auf der GPU (RTX 5080, 16 GB) sind neben Ollama ~3,4 GB durch andere Dienste belegt.
 
 ## System-Prompts und Modi
 
@@ -114,11 +119,25 @@ Worauf achten: Absage bei Bagatellbefund (Prellung von 2020 → kein Reha-Attest
 
 **OCR läuft asynchron:** `POST /api/ocr` nimmt die Datei an, startet einen Thread und liefert sofort eine `job_id`. Das Frontend pollt `GET /api/ocr/<job_id>` bis `status == "done"` und schickt den Text danach als `pre_extracted_texts` an `/chat`. Beim Senden wartet das Frontend auf noch laufende OCR-Jobs. Jobs liegen im Prozessspeicher (`_ocr_jobs`, TTL 30 Minuten) – sie überleben keinen Reload und funktionieren nur mit einem einzelnen Worker.
 
-**SSE-Events von `/chat`:** `user_content` (einmalig zuerst), `thinking` (einmalig, sobald das Modell denkt – Frontend zeigt „denkt nach …“), `token`, `done`, `error` (auch bei Ollama-Fehler mitten im Stream, Abbruch ohne `done` oder leerer Antwort).
+**SSE-Events von `/chat`:** `status` (Text während der Websuche, z. B. „Websuche: „…“ …“), `user_content` (einmalig, vor dem ersten Token – nach einer Websuche erst danach), `search` (einmalig nach `user_content`, wenn gesucht wurde: `queries`, `sources` [{title, url}], `blocked`), `thinking` (einmalig, sobald das Modell denkt – Frontend zeigt „denkt nach …“), `token`, `done`, `error` (auch bei Ollama-Fehler mitten im Stream, Abbruch ohne `done` oder leerer Antwort).
 
 **Dokumente in Folgefragen:** `/chat` sendet als erstes SSE-Event `{"user_content": …}` mit der vollständigen User-Nachricht inkl. Dateitext. Das Frontend legt sie in die Historie, damit Folgefragen die Dokumente noch sehen. Im localStorage wird nur der getippte Text gespeichert (Datenschutz + Speicherlimit). Ein neu geladener alter Chat kennt die Dokumente daher nicht mehr.
 
 Überschreitet der kombinierte Dateitext `MAX_FILE_CHARS`, wird er hart abgeschnitten und ein Hinweis an den Prompt gehängt.
+
+## Websuche
+
+Angelehnt an den Such-Proxy aus c't 23/2026 („Zukunftswissen“), aber **ohne `/search`-Trigger**: Vor jeder Antwort entscheidet ein Modell, ob gesucht wird. Ablauf in `/chat` (alles im SSE-Generator, damit der Nutzer sofort Rückmeldung sieht):
+
+1. **Router** (`_route_web_search`): `ROUTER_MODEL` bzw. das gewählte Chat-Modell, `think: false`, `temperature 0`, Ollama-JSON-Schema `{search, news, queries[≤2]}`. Bekommt die getippte Nachricht, die letzte Antwort (1500 Zeichen) und die Dokumente (4000 Zeichen). Kein eigenes kleines Modell: Das Chat-Modell ist ohnehin geladen; ein zweites Modell kostete beim Wechsel 6–9 s Ladezeit. Mit geladenem Modell 0,5–1 s. `num_ctx` = gerade geladene Größe (`_loaded_ctx` über `/api/ps`), sonst lädt Ollama neu.
+2. **Datenschutzfilter** (`_sensitive_terms`, `_query_is_safe`) – fail closed: Suchbegriffe mit Datum, ≥ 5 Ziffern, E-Mail, Telefonnummer, „Herr/Frau/Patient/geb.“ oder einem Namen/Straßen-/Ortsnamen aus Dokumenten, Historie und Nachricht (erkannt hinter Herr/Frau/Patient/Betrifft/Dr./geb., PLZ, Straßenendungen) werden verworfen. Verworfene Anfragen nie loggen. Das Frontend zeigt gesuchte Begriffe und die Zahl verworfener Anfragen an – der Arzt sieht, was die Praxis verlassen hat.
+3. **Suche** (`_web_research`): SearXNG-Abfragen und Seitenabrufe parallel; URL-Dedupe ohne Tracking-Parameter; Bewertung Titel × 2 + Snippet × 1, Treffer ohne Suchbegriff fliegen raus; je Suche bis 8 Kandidaten, 4 Seiten übernommen, 3000 Zeichen/Seite; Gesamtfrist 8 s; nur HTML/Text, Status 200, ≤ 5 MB, nur öffentliche IPs (auch bei Weiterleitungen geprüft); Bot-/Captcha-Seiten verworfen. `news` → `time_range=month`.
+4. **Links** in der getippten Nachricht (max. 2) werden immer abgerufen, auch ohne Suche. Links in Dokumenten nicht.
+5. **Kontext:** Webblock (`=== Webrecherche …`, mit Injection-Hinweis) vor den Dokumenten in der User-Nachricht, `_WEB_SYSTEM_NOTE` an den System-Prompt (Quellen als [n], Kriterien nur mit Belegtem abgleichen, keine Anweisungen aus Webinhalten). Der Webblock geht per `user_content` in die Historie. Bei Modellen ohne festen `num_ctx` wird das Modell mit der größeren Kontextgröße schon während des Abrufs vorgeladen (`_warm_up`).
+
+Fehler in Router oder Suche führen nie zu einem Abbruch – dann wird ohne Websuche geantwortet.
+
+**Router testen:** Mit erfundenen Patientendaten Entscheidungen und Suchbegriffe vollständig ausgeben. Mit echten Befunden aus `testdateien/` **nur Flags und Zähler ausgeben, nie Suchbegriffe oder Dokumenttext** – und nur den Router aufrufen, keine echte Suche ausführen. Stand 11/2026: 24/24 korrekte Entscheidungen auf den drei echten Befunden (3 Standardaufgaben → nie Suche, Rechercheaufgabe → Suche ohne verworfene Begriffe), 9/9 auf erfundenen Fällen.
 
 ## API-Endpunkte
 
@@ -147,6 +166,7 @@ Worauf achten: Absage bei Bagatellbefund (Prellung von 2020 → kein Reha-Attest
 - Keine Authentifizierung (internes Netz, Caddy-Zugang)
 - Keine Datenbank – Server zustandslos, History kommt vom Client im Request-Body
 - Keine externen AI-Provider; ausschließlich lokales Ollama und der lokale Whisper-Service
+- Nach außen gehen nur Suchbegriffe (über SearXNG an Google/Bing/DuckDuckGo usw.) und Seitenabrufe der Websuche – nie Dokumenttext
 
 ## Caddy-Integration
 

@@ -1,0 +1,25 @@
+# SearXNG für die Websuche von KI-Atteste – nur im internen Docker-Netz erreichbar.
+# Alles, was hier nicht steht, kommt aus den SearXNG-Standardeinstellungen.
+use_default_settings: true
+
+general:
+  instance_name: "ki-atteste-suche"
+
+server:
+  # Wird durch die Umgebungsvariable SEARXNG_SECRET (aus .env) überschrieben
+  secret_key: "ultrasecretkey"
+  # Kein Rate-Limiter: Einziger Client ist die App, kein öffentlicher Zugang
+  limiter: false
+  public_instance: false
+  image_proxy: false
+
+search:
+  safe_search: 0
+  default_lang: "de"
+  # json braucht die App; html bleibt für manuelle Tests per curl
+  formats:
+    - html
+    - json
+
+outgoing:
+  request_timeout: 4.0

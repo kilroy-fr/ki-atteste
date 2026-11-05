@@ -20,6 +20,11 @@ services:
       - MAX_FILE_CHARS=${MAX_FILE_CHARS:-80000}
       - WHISPER_HOST=${WHISPER_HOST:-diktat-whisper}
       - WHISPER_PORT=${WHISPER_PORT:-8000}
+      - TITLE_MODEL=${TITLE_MODEL:-llama3.2:3b}
+      # Websuche: leer setzen (SEARXNG_URL=) schaltet sie ab
+      - SEARXNG_URL=${SEARXNG_URL-http://searxng:8080}
+      # Modell für die Entscheidung "Websuche ja/nein"; leer = gewähltes Chat-Modell
+      - ROUTER_MODEL=${ROUTER_MODEL:-}
     stdin_open: true
     tty: true
     extra_hosts:
@@ -27,6 +32,24 @@ services:
     networks:
       - app-network
       - diktat-network
+      - search-network
+    depends_on:
+      - searxng
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # Metasuchmaschine für die Websuche – ohne Port nach außen, nur für die App erreichbar
+  searxng:
+    container_name: ki-atteste-searxng
+    image: searxng/searxng:latest
+    restart: unless-stopped
+    volumes:
+      - ./searxng/settings.yml:/etc/searxng/settings.yml:ro
+    environment:
+      - SEARXNG_SECRET=${SEARXNG_SECRET:?SEARXNG_SECRET in .env setzen (openssl rand -hex 32)}
+      - SEARXNG_BASE_URL=http://searxng:8080/
+    networks:
+      - search-network
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -37,3 +60,5 @@ networks:
   diktat-network:
     external: true
     name: diktat-network
+  search-network:
+    name: ki-atteste-search

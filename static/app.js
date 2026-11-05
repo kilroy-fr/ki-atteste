@@ -146,6 +146,7 @@ function loadChat(id) {
     } else if (turn.role === 'assistant') {
       const bubble = appendAssistantMessage('', false);
       updateAssistantMessage(bubble, turn.content, false);
+      if (turn.web) renderWebInfo(bubble, turn.web);
     }
   }
   renderSidebar();
@@ -461,6 +462,7 @@ async function sendMessage() {
   currentAbortController = new AbortController();
 
   let fullResponse = '';
+  let webInfo = null;
 
   try {
     // Laufende OCR abwarten – sonst gehen JPGs ohne Text raus und PDFs werden doppelt erkannt
@@ -512,15 +514,21 @@ async function sendMessage() {
             userTurn.content = chunk.user_content;
             continue;
           }
+          if (chunk.status && !started) {
+            setStatusLabel(assistantBubble, chunk.status);
+            continue;
+          }
+          if (chunk.search) {
+            webInfo = chunk.search;
+            renderWebInfo(assistantBubble, webInfo);
+            continue;
+          }
           if (chunk.error) {
             updateAssistantMessage(assistantBubble, `⚠️ Fehler: ${chunk.error}`, false);
             break;
           }
           if (chunk.thinking && !started) {
-            const content = assistantBubble.querySelector('.message-content');
-            if (content && !content.querySelector('.thinking-label')) {
-              content.insertAdjacentHTML('beforeend', '<span class="thinking-label">denkt nach …</span>');
-            }
+            setStatusLabel(assistantBubble, 'denkt nach …');
             continue;
           }
           if (chunk.token) {
@@ -540,7 +548,9 @@ async function sendMessage() {
     }
 
     updateAssistantMessage(assistantBubble, fullResponse, false);
-    conversationHistory.push({role: 'assistant', content: fullResponse});
+    const assistantTurn = {role: 'assistant', content: fullResponse};
+    if (webInfo) assistantTurn.web = webInfo;
+    conversationHistory.push(assistantTurn);
     saveCurrentChat(newTitle);
 
     if (isNewChat && fullResponse.length > 30) {
@@ -662,6 +672,48 @@ function updateAssistantMessage(bubble, text, streaming) {
     content.innerHTML = renderMarkdown(text);
   }
   scrollToBottom();
+}
+
+// Hinweis in der noch leeren Antwortblase ("denkt nach …", "Websuche: …")
+function setStatusLabel(bubble, text) {
+  const content = bubble.querySelector('.message-content');
+  if (!content) return;
+  let label = content.querySelector('.thinking-label');
+  if (!label) {
+    label = document.createElement('span');
+    label.className = 'thinking-label';
+    content.appendChild(label);
+  }
+  label.textContent = text;
+}
+
+// Websuche transparent machen: Was hat die Praxis verlassen, welche Quellen wurden genutzt?
+// Liegt außerhalb von .message-content, damit es beim Kopieren nicht mitkommt.
+function renderWebInfo(bubble, info) {
+  let box = bubble.querySelector('.message-web');
+  if (!box) {
+    box = document.createElement('div');
+    box.className = 'message-web';
+    bubble.insertBefore(box, bubble.querySelector('.copy-msg-btn'));
+  }
+  let html = '';
+  if (info.queries && info.queries.length) {
+    html += '<div class="web-queries">🔎 Gesucht: ' + info.queries.map(q => '„' + escapeHtml(q) + '“').join(', ') + '</div>';
+  }
+  if (info.blocked) {
+    html += '<div class="web-blocked">🛡️ ' + info.blocked + ' Suchanfrage(n) verworfen – möglicher Personenbezug</div>';
+  }
+  if (info.sources && info.sources.length) {
+    html += '<ol class="web-sources">' + info.sources.map(s => {
+      let host = s.url;
+      try { host = new URL(s.url).hostname.replace(/^www\./, ''); } catch (_) {}
+      return '<li><a href="' + escapeHtml(s.url) + '" target="_blank" rel="noopener noreferrer">' +
+        escapeHtml(s.title || host) + '</a> <span class="web-host">' + escapeHtml(host) + '</span></li>';
+    }).join('') + '</ol>';
+  } else if (info.queries && info.queries.length) {
+    html += '<div class="web-blocked">Keine verwertbaren Seiten gefunden</div>';
+  }
+  box.innerHTML = html;
 }
 
 // Markdown-Zeichen entfernen, damit in der Praxissoftware kein "##" oder "**" landet
