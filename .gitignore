@@ -7,3 +7,7 @@ __pycache__/
 
 # Originale Patientendokumente (nur lokal, niemals committen)
 testdateien/
+
+# Lokale Claude-Code-Einstellungen (enthalten lokale Pfade)
+.claude/settings.json
+.claude/settings.local.json
