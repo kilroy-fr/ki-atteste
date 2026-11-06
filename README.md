@@ -146,4 +146,6 @@ Die Python-Abhängigkeiten sind in `requirements.txt` auf feste Versionen gepinn
 
 ## Lizenz
 
-Internes Werkzeug – kein öffentlicher Vertrieb.
+MIT-Lizenz – siehe [LICENSE](LICENSE).
+
+Die erzeugten Texte sind Entwürfe und ersetzen keine ärztliche Prüfung; Nutzung auf eigene Verantwortung.
