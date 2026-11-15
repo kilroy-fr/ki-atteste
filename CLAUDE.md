@@ -28,6 +28,7 @@ docker-compose.yml              App + SearXNG, zwei externe Netzwerke + internes
 .env / .env.example             Umgebungsvariablen
 VERSION                         Semver-Versionsdatei (wird im Frontend angezeigt)
 requirements.txt                Python-Abhängigkeiten
+requirements-nodeps.txt         PyMuPDF – wird mit --no-deps installiert
 testdateien/                    Echte Arztbriefe (Einwilligung liegt vor) – in .gitignore UND .dockerignore
 ```
 
@@ -46,7 +47,7 @@ docker compose logs -f
 docker compose down && docker compose up --build -d
 ```
 
-**Hot-Reload:** Nur `app.py`, `templates/` und `static/` sind als Volumes eingebunden – Änderungen dort sind ohne Rebuild sofort aktiv (Flask-Dev-Server mit `use_reloader=True`).
+**Hot-Reload:** Nur `app.py`, `templates/` und `static/` sind als Volumes eingebunden – Änderungen dort sind ohne Rebuild sofort aktiv (Flask-Dev-Server mit `use_reloader=True`). **Unzuverlässig unter Docker Desktop/Windows:** Der Reloader erkennt Änderungen an `app.py` nicht immer (11/2026: Websuche-Code lag zwei Tage im Mount, lief aber nicht). Nach Änderungen an `app.py` im Log auf „Detected change … reloading“ achten, sonst `docker restart ki-atteste-web`.
 
 **Achtung:** `prompts/` ist **nicht** gemountet und landet über `COPY . .` im Image. Prompt-Änderungen brauchen einen **Rebuild**, ein Neustart allein genügt nicht.
 
@@ -178,4 +179,4 @@ Version steht in `VERSION` (Semver). Die Zahl wird im Frontend über den `inject
 
 ## Abhängigkeiten
 
-Alle Versionen sind in `requirements.txt` gepinnt. Beim Anheben von Pillow oder PyMuPDF den Upload-Pfad testen (Text-PDF, Bild-PDF, JPG), da beide direkt in der OCR-Kette hängen. `import pymupdf as fitz` – nicht `import fitz`, das ist seit PyMuPDF 1.28 der Legacy-Alias und erzeugt eine Warnung.
+Alle Versionen sind in `requirements.txt` gepinnt, PyMuPDF in `requirements-nodeps.txt`. PyMuPDF 2.x zieht sonst onnxruntime, numpy, networkx, pymupdf4llm und pymupdf-layout nach (~160 MB, Image 1,02 GB → 0,8 GB), die App nutzt davon nichts. Deshalb: kein `pip check` im Build (meldet die bewusst fehlenden Pakete), stattdessen Import-Test mit `-W error` im Dockerfile. pip selbst ist im Dockerfile gepinnt, weil das Basis-Image ein veraltetes pip mitbringt; Updates prüfen mit `docker compose build --pull` und `pip list --outdated` im Container. Beim Anheben von Pillow oder PyMuPDF den Upload-Pfad testen (Text-PDF, Bild-PDF, JPG), da beide direkt in der OCR-Kette hängen. `import pymupdf as fitz` – nicht `import fitz`, das ist seit PyMuPDF 1.28 der Legacy-Alias und erzeugt eine Warnung.

@@ -1,0 +1,6 @@
+# Wird mit --no-deps installiert (siehe Dockerfile).
+# PyMuPDF 2.x zieht sonst onnxruntime, numpy, networkx, pymupdf4llm und
+# pymupdf-layout nach (~160 MB). Die App braucht davon nichts – sie nutzt nur
+# open/get_text/get_pixmap. Bei jedem Update ohne Warnung testen:
+#   python -W error -c "import pymupdf"
+PyMuPDF==2.1

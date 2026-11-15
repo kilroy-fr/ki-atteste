@@ -10,8 +10,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Python-Abhängigkeiten
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY requirements.txt requirements-nodeps.txt ./
+# pip des Basis-Images hinkt hinterher (25.0.1 mit bekannten Lücken)
+ENV PIP_ROOT_USER_ACTION=ignore
+RUN pip install --no-cache-dir pip==26.3 \
+    && pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir --no-deps -r requirements-nodeps.txt \
+    && python -W error -c "import pymupdf, PIL, docx, pytesseract, flask, requests"
 
 # App-Code
 COPY . .
