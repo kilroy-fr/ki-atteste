@@ -42,8 +42,8 @@ ALLOWED_MODELS = {
 }
 
 MODEL_DESCRIPTIONS: dict[str, str] = {
-    "gemma4:12b": "Empfohlen – schnell (5–15 s), zuverlässig",
-    "gemma4:26b": "Gründlich – denkt vorher nach (meist 20–60 s)",
+    "gemma4:12b": "Empfohlen – schnell (meist 2–6 s), zuverlässig",
+    "gemma4:26b": "Gründlich – denkt vorher nach (meist 10–35 s)",
 }
 
 # Sampling und Thinking pro Modell. Mit Thinking braucht gemma4 temperature 1.0 –

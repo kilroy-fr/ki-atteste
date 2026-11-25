@@ -61,7 +61,7 @@ docker compose down && docker compose up --build -d
 | `MAX_FILE_CHARS` | `80000`                             | Obergrenze für kombinierten Dateitext je Chat-Request |
 | `WHISPER_HOST`   | `diktat-whisper`                    | Hostname des Whisper-Services                 |
 | `WHISPER_PORT`   | `8000`                              | Port des Whisper-Services                     |
-| `TITLE_MODEL`    | `llama3.2:3b`                       | Kleines Modell für die Chat-Titelgenerierung (**derzeit nicht installiert** → Titel bleiben beim Fallback) |
+| `TITLE_MODEL`    | `llama3.2:3b`                       | Kleines Modell für die Chat-Titelgenerierung (seit 11/2026 installiert) |
 | `SEARXNG_URL`    | `http://searxng:8080`               | SearXNG-Endpunkt; leer = Websuche aus         |
 | `SEARXNG_SECRET` | –                                   | Pflicht für den SearXNG-Container (`openssl rand -hex 32`) |
 | `ROUTER_MODEL`   | leer                                | Modell für „Websuche ja/nein“; leer = gewähltes Chat-Modell |
@@ -72,12 +72,14 @@ docker compose down && docker compose up --build -d
 
 Die Auswahl ist eine **Whitelist** (`ALLOWED_MODELS` in `app.py`), keine Ausschlussliste. Nur Modelle, die sowohl in der Whitelist stehen als auch in Ollama installiert sind, erscheinen im Dropdown – sortiert nach Größe absteigend.
 
-- Standard-Modell: `gemma4:12b` (ohne Thinking, temperature 0.4, 5–15 s)
-- Whitelist: `gemma4:12b`, `gemma4:26b` (mit Thinking, temperature 1.0, meist 20–60 s, Median 40 s)
+- Standard-Modell: `gemma4:12b` (ohne Thinking, temperature 0.4, Median 3,7 s, max. ~16 s)
+- Whitelist: `gemma4:12b`, `gemma4:26b` (mit Thinking, temperature 1.0, meist 10–35 s, Median 24 s)
 - Pro Modell: Kurztext in `MODEL_DESCRIPTIONS`, Sampling in `MODEL_OPTIONS`, Thinking in `MODEL_THINK`. **Neue Modelle in alle vier Dicts eintragen** – und vorher mit echten Befunden testen.
 - Modellauswahl wird per Cookie (`selected_model`, 1 Jahr) und Flask-Session persistiert
 
 **Warum nur gemma4** (Tests 09/2026 mit echten Arztbriefen, je Aufgabe mehrere Durchläufe): qwen3:8b/14b, qwen2.5:14b, deepseek-r1:14b, phi4, mistral-nemo, gemma4:e4b und gpt-oss:20b haben auch mit angepasstem Prompt Fakten erfunden – Abkürzungen wie pDMS/DS frei „aufgelöst“, Medikamente und Datumsangaben erfunden, als Absender des Fremdbefunds unterschrieben, Funktionseinschränkungen erfunden und Reha-Atteste für eine Bagatellverletzung von 2020 geschrieben. deepseek-r1 mischt zudem Chinesisch/Englisch ein.
+
+**gemma4-Update mit MTP-Drafter (25.11.2026, Ollama 0.40.18):** Die Registry liefert gemma4 jetzt mit neu gepackten Gewichten und einem Draft-Modell für spekulatives Decoding (`draft_num_predict: 3`). Gleicher Tag, kein Code-Umbau nötig. Vergleich alt/neu (3 Befunde × 3 Aufgaben × 3 Läufe, lokaler Judge): rund doppelt so schnell (12b 70 → 137 tok/s, 26b 63 → 97 tok/s), keine leeren Antworten, keine fremde Unterschrift, Bagatellbefund weiter 3/3 abgelehnt, laut Judge weniger erfundene Fakten. Auffällig bei 12b-neu: löst „DS“ in einem Befund in 2/3 Läufen auf (inhaltlich korrekt, aber gegen die Prompt-Regel). Beim Widerspruch zur stationären Reha schreibt es im Rheuma-Befund kein Attest, sondern fragt nach (3/3; alt-12b und 26b schreiben es). 26b läuft nur noch zu ~79 % auf der GPU (vorher 95 %), ist trotzdem schneller. Der alte 12b-Stand liegt als `gemma4:12b-alt-2026-06` vor (die alten 26b/e4b sind gelöscht). Rollback: `docker exec ollama ollama cp gemma4:12b-alt-2026-06 gemma4:12b`.
 
 **Thinking bei gemma4:** Nur mit temperature 1.0. Bei 0.4 liefen Denkphasen in Schleifen (bis 220 s, danach leere Antwort). Für gemma4:12b bringt Thinking keine bessere Qualität, nur 3–10× mehr Wartezeit. `num_predict` begrenzt ausufernde Denkphasen; kommt dabei keine Antwort zustande, meldet `/chat` einen Fehler statt einer leeren Blase. Während des Denkens sendet `/chat` einmalig `{"thinking": true}`, das Frontend zeigt „denkt nach …“.
 
